@@ -1,0 +1,29 @@
+# Research architecture
+
+Use an environment-independent planner and a simulator-backed evaluator. At decision time each policy receives the public history, objective, remaining budget and any legitimate public action constraints. The evaluator owns simulator snapshots, future random keys and outcome labels. This boundary allows the same planner to operate in a grid world, a crafting game and eventually a card game.
+
+## Proposed components
+
+| Component | Inputs and outputs | Responsibility |
+| --- | --- | --- |
+| Environment adapter | Reset or step produces public observation, action specification, terminal flags and scoreable events | Map native actions and observations, apply task termination, pin rules and wrapper versions. Provide optional privileged branching to the evaluator through a separate interface. |
+| Trajectory recorder and split manifest | Episodes and policy versions produce trajectories, snapshot references and world-group splits | Preserve action order, termination reason and data provenance. All descendants of one root episode belong to its split. |
+| History encoder and dynamics | Public observation/action prefix produces a latent state. A latent state and candidate action produce a distribution of subsequent features and termination. | Handle memory, stochastic evolution and optional event-scale predictions. Encode order explicitly when the rules use it. |
+| Goal representation and executor | Target region, history and deadline produce primitive actions and a stop reason | Fit fixed neighborhoods or outcome-informed regions from training data. Freeze the membership rule for each comparison, then learn or plan short action sequences toward the region. |
+| Candidate proposer | Public history or latent state, terminal objective and budget produce region candidates and deadlines | Propose candidates from replay, a demonstration-trained generator, an RL-tuned generator, or coarse world-model predictions. Use the same candidate interface and retain proposal provenance. |
+| High-level planner | Current latent state, terminal goal and budget produce a target, duration or direct plan | Generate alternatives, score their likely consequences, execute the first segment and replan from observed outcomes. |
+| Branch evaluator and experiment runner | Frozen starts, interventions, policies and random streams produce attempts and aggregate results | Collect interventional labels, enforce permissions, meter interactions and compute, and estimate paired outcomes. |
+
+A proposed Python package can place these responsibilities under `src/worth_reaching/` as `envs`, `data`, `models`, `planning` and `evaluation`. The runner composes them from an experiment configuration. Shared public types describe trajectories, actions and goals. Environment-specific imports stay within adapters. The planner can call learned dynamics. Only the evaluation and training-data paths can obtain simulator snapshots. A bounded simulator planner is a separately labeled baseline.
+
+## Execution and data contracts
+
+1. A collector creates root episodes and records the public prefix, behavior policy and observable task outcomes. An adapter can additionally emit an opaque snapshot handle into a private store.
+2. The branch evaluator names an action or waypoint and a deadline before rollout. It restores a start, forks the random stream, applies the intervention, then runs the declared continuation policy. Exact replay and fresh stochastic continuations are distinct sampling modes.
+3. An attempt record carries the root world and episode IDs, prefix index, public history reference, option or action ID, region and proposer versions where applicable, policy and encoder versions, budget, random-stream group, arrival outcome, terminal outcome, elapsed steps and termination reason. A training loader exposes an explicit allowlist of fields. A hindsight-achieved goal and a prospectively attempted goal have distinct labels.
+4. At inference, the planner encodes the latest public history, scores alternatives using its learned models, and gives the executor a target and time budget. The next observation closes the loop. For a direct planner the executor targets the terminal objective. Results record when a waypoint completes, times out, becomes infeasible, or is replaced.
+5. Each run stores an experiment configuration, dependency versions, code revision, seed and split manifests, dataset or checkpoint identifiers, and metric definitions. Large traces, datasets and checkpoints live in a configured artifact directory. Commit small manifests or representative fixtures where redistribution permits.
+
+## First interface checks
+
+Test termination at the action limit and success on the last allowed action. Check that restoring a branch reproduces its public prefix and leaves the source episode intact. Perturb privileged fields while holding the public history fixed and compare the serialized policy input. Verify that an executor evaluated against a frozen waypoint uses the same encoder version and arrival rule that defined that waypoint.
