@@ -1,0 +1,36 @@
+name: CPU checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpu-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.13.7"
+          enable-cache: true
+      - run: uv sync --locked --python 3.12 --group dev --extra minigrid
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check src tests
+      - run: uv run --no-sync pytest
+      - run: uv run --no-sync wr pilot --config configs/minigrid/keycorridor.toml --out "$RUNNER_TEMP/keycorridor"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: keycorridor-pilot
+          path: ${{ runner.temp }}/keycorridor
+          if-no-files-found: error

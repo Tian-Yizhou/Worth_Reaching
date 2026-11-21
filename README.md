@@ -23,8 +23,24 @@ The proposed first benchmark is Craftax-Classic with symbolic observations. Mini
 | [Contributing](CONTRIBUTING.md) | Development workflow and reproducibility rules |
 | [Agent instructions](AGENTS.md) | Entry point for assistants working in this repository |
 
-The repository is at the design stage. The plans describe proposed experiments. Results and runnable commands belong alongside the implementation that produces them.
-
 ## Development setup
 
-The project will use uv and require Python 3.12 or newer. To prepare a development machine now, install uv and check it with `uv --version`. The MiniGrid implementation PR will add the project configuration, lockfile and commands for the CPU pilot. [uv installation](https://docs.astral.sh/uv/getting-started/installation/)
+The project uses uv and requires Python 3.12 or newer. Install uv and sync the locked CPU dependencies. [uv installation](https://docs.astral.sh/uv/getting-started/installation/)
+
+```bash
+uv sync --locked --group dev --extra minigrid
+uv run --no-sync ruff check .
+uv run --no-sync ruff format --check src tests
+uv run --no-sync pytest
+```
+
+## Run the KeyCorridor pilot
+
+```bash
+run_dir="$(mktemp -d)/keycorridor"
+uv run --no-sync wr pilot --config configs/minigrid/keycorridor.toml --out "$run_dir"
+```
+
+The fixed seed and 12-action prefix leave the agent in the open doorway, facing north with two actions remaining. Forcing `right` lets the fixed continuation policy pick up the ball on the last action. Forcing `forward` spends a step against the wall and the episode times out as the policy turns. Expected outcomes are `right: success` and `forward: timeout`. [KeyCorridor environment](https://minigrid.farama.org/environments/babyai/KeyCorridor/)
+
+The run directory contains `manifest.json` with the resolved configuration, simulator versions and interaction counts, `prefix.json` with the recorded public trajectory, `attempts.jsonl` with the two branches, and `summary.json` with the outcome counts. The tests rerun the CLI, compare both public traces byte for byte, and perturb a hidden tile while checking that policy input stays identical.
