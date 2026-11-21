@@ -44,3 +44,45 @@ uv run --no-sync wr pilot --config configs/minigrid/keycorridor.toml --out "$run
 The fixed seed and 12-action prefix leave the agent in the open doorway, facing north with two actions remaining. Forcing `right` lets the fixed continuation policy pick up the ball on the last action. Forcing `forward` spends a step against the wall and the episode times out as the policy turns. Expected outcomes are `right: success` and `forward: timeout`. [KeyCorridor environment](https://minigrid.farama.org/environments/babyai/KeyCorridor/)
 
 The run directory contains `manifest.json` with the resolved configuration, simulator versions and interaction counts, `prefix.json` with the recorded public trajectory, `attempts.jsonl` with the two branches, and `summary.json` with the outcome counts. The tests rerun the CLI, compare both public traces byte for byte, and perturb a hidden tile while checking that policy input stays identical.
+
+## Collect Craftax-Classic trajectories
+
+The adapter uses Craftax-Classic Symbolic with the native 17-action space and a fixed action budget. The first transition that earns the iron-pickaxe achievement is success, including on the final allowed action. Death from depleted health or lava takes precedence over timeout. The adapter reads the terminal transition from the native environment before any reset. [Craftax implementation](https://github.com/MichaelTMatthews/Craftax)
+
+Run the short CPU check from the repository root. The default recipe collects four random-policy episodes with at most 32 actions each.
+
+```bash
+uv sync --locked --group dev --extra minigrid --extra craftax
+JAX_PLATFORMS=cpu uv run --no-sync pytest
+JAX_PLATFORMS=cpu uv run --no-sync wr collect \
+  --config configs/craftax/iron_pickaxe.toml --out "$(mktemp -d)/craftax"
+```
+
+Each run writes the versioned configuration in `manifest.json`, the world assignments in `splits.json`, one complete public trajectory per line in `trajectories.jsonl.gz`, and the final outcome and interaction counts in `summary.json`. The split manifest is written before collecting any episode. A stable hash of the world identity assigns about 80% of worlds to train, 10% to dev and 10% to test. Overlapping seed ranges reuse the same world and split. Use a different `seed_start` in the TOML file to collect additional worlds. A run is complete when its summary is present.
+
+### Longer server runs
+
+Start a tmux session on the server. From the repository root inside that session, run the commands below. The example reserves at most one million environment actions. Use a new output name for each collection.
+
+```bash
+tmux new-session -s craftax-collect
+```
+
+```bash
+export WR_ARTIFACTS="${WR_ARTIFACTS:-$HOME/wr-artifacts}"
+mkdir -p "$WR_ARTIFACTS"
+uv sync --locked --group dev --extra minigrid --extra craftax
+run_dir="$WR_ARTIFACTS/craftax-$(date -u +%Y%m%dT%H%M%SZ)"
+set -o pipefail
+JAX_PLATFORMS=cpu uv run --no-sync wr collect \
+  --config configs/craftax/iron_pickaxe.toml --episodes 1000 --budget 1000 \
+  --out "$run_dir" 2>&1 | tee "$run_dir.log"
+```
+
+Keep raw trajectories, logs and checkpoints in `WR_ARTIFACTS`. To include the small run metadata in a Mac handoff, copy selected files after collection finishes.
+
+```bash
+share_dir="local-file/results/$(basename "$run_dir")"
+mkdir -p "$share_dir"
+cp "$run_dir/manifest.json" "$run_dir/splits.json" "$run_dir/summary.json" "$share_dir/"
+```

@@ -27,3 +27,9 @@ A proposed Python package can place these responsibilities under `src/worth_reac
 ## First interface checks
 
 Test termination at the action limit and success on the last allowed action. Check that restoring a branch reproduces its public prefix and leaves the source episode intact. Perturb privileged fields while holding the public history fixed and compare the serialized policy input. Verify that an executor evaluated against a frozen waypoint uses the same encoder version and arrival rule that defined that waypoint.
+
+## Craftax collection contract
+
+Craftax-Classic passes symbolic observations and action IDs to the collection path. The adapter owns the native state. The evaluator can fork a live snapshot and supply a transition key for each step. World generation, transition randomness and policy sampling use separate streams. The terminal label is assigned from the step that first achieves the iron pickaxe, leaves the agent dead or in lava, or exhausts the budget, in that order.
+
+Each compressed trajectory record contains the episode ID, initial observation, public transitions and outcome. The split manifest maps the episode ID to its root world and split before collection. The run manifest identifies the observation schema, rules and action vocabulary. The final summary is written after the trajectory file closes.

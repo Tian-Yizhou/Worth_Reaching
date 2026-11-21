@@ -1,13 +1,13 @@
 """Run and record the KeyCorridor measurement pilot."""
 
 import json
-import subprocess
 import tomllib
 from contextlib import closing
 from dataclasses import asdict, dataclass
 from importlib.metadata import version
 from pathlib import Path
 
+from worth_reaching.artifacts import code_revision, write_json
 from worth_reaching.contracts import Action
 from worth_reaching.envs.minigrid import (
     CONTINUATION_ID,
@@ -54,37 +54,11 @@ class PilotConfig:
         return cls(seed, budget, prefix, interventions)
 
 
-def _code_revision() -> dict[str, str | bool | None]:
-    repo = Path(__file__).resolve().parents[2]
-    try:
-        revision = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        status = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-    except (OSError, subprocess.CalledProcessError):
-        return {"commit": None, "dirty": None}
-    return {"commit": revision, "dirty": bool(status)}
-
-
-def _write_json(path: Path, value: object) -> None:
-    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-
-
 def run_pilot(config: PilotConfig, out: Path) -> dict[str, object]:
     if out.exists():
         raise FileExistsError(f"Output directory already exists: {out}")
 
-    code_revision = _code_revision()
+    revision = code_revision()
     with closing(KeyCorridorEpisode(seed=config.seed, budget=config.budget)) as episode:
         recorded = replay_prefix(episode, config.prefix)
 
@@ -109,7 +83,7 @@ def run_pilot(config: PilotConfig, out: Path) -> dict[str, object]:
             )
 
     out.mkdir(parents=True)
-    _write_json(
+    write_json(
         out / "manifest.json",
         {
             "schema_version": 1,
@@ -121,14 +95,14 @@ def run_pilot(config: PilotConfig, out: Path) -> dict[str, object]:
             "continuation_policy": CONTINUATION_ID,
             "sampling": "exact_replay",
             "config": asdict(config),
-            "code_revision": code_revision,
+            "code_revision": revision,
             "environment_resets": 1 + len(attempts),
             "prefix_recording_steps": len(config.prefix),
             "prefix_replay_steps": len(config.prefix) * len(attempts),
             "branch_steps": sum(attempt.steps_elapsed for attempt in attempts),
         },
     )
-    _write_json(out / "prefix.json", asdict(recorded))
+    write_json(out / "prefix.json", asdict(recorded))
     with (out / "attempts.jsonl").open("w", encoding="utf-8") as stream:
         for attempt in attempts:
             stream.write(json.dumps(asdict(attempt)) + "\n")
@@ -138,5 +112,5 @@ def run_pilot(config: PilotConfig, out: Path) -> dict[str, object]:
         "successes": sum(attempt.success for attempt in attempts),
         "outcomes": {attempt.intervention: attempt.outcome for attempt in attempts},
     }
-    _write_json(out / "summary.json", summary)
+    write_json(out / "summary.json", summary)
     return summary

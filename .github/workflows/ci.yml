@@ -16,6 +16,8 @@ jobs:
   cpu-contracts:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      JAX_PLATFORMS: cpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -24,7 +26,7 @@ jobs:
         with:
           version: "0.13.7"
           enable-cache: true
-      - run: uv sync --locked --python 3.12 --group dev --extra minigrid
+      - run: uv sync --locked --python 3.12 --group dev --extra minigrid --extra craftax
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync ruff format --check src tests
       - run: uv run --no-sync pytest
