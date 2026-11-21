@@ -73,3 +73,21 @@ JAX_PLATFORMS=cpu uv run --no-sync wr branch \
 ```
 
 `decisions.jsonl` records the source episode, prefix length and two declared actions. `attempts.jsonl` records each action and repeat, elapsed steps, remaining actions and outcome. Join attempts by decision ID and repeat to compare the paired outcomes. For a shorter deadline, count successful attempts whose elapsed steps fit the deadline. `manifest.json` identifies the source run, split manifest and continuation checkpoint. The final `summary.json` records per-arm counts at the configured horizon, paired success outcomes and separate counts for replay and branch actions.
+
+## Action-ranking baselines
+
+`wr rank` fits three scoring heads on a completed train branch run and evaluates them on a separate dev or test branch run from the same source collection. The command compares an action-only head, public-history return regression and public-history pairwise ranking with uniform choice. The two history heads use the same representation and candidates. Features are the current observation, the mean of up to four observations, the recent action histogram and the remaining episode budget. Each input ends at the declared decision. Success by the specified deadline is the training target for return regression. Discordant paired outcomes supply the pairwise loss.
+
+Collect paired train and dev branches first. Use distinct worlds, a common lead and horizon, and at least two repeats per evaluation decision. Substitute the paths of completed runs below.
+
+```bash
+dataset=results/craftax-expert-20261121T082718Z-531436
+train_branches=results/craftax-train-branches/labels
+dev_branches=results/craftax-dev-branches/labels
+out="$(mktemp -d results/craftax-ranking.XXXXXX)/ranking"
+uv run --no-sync wr rank \
+  --dataset "$dataset" --train-branches "$train_branches" \
+  --eval-branches "$dev_branches" --deadline 8 --out "$out"
+```
+
+Even-numbered evaluation repeats select a reference action. Odd-numbered repeats estimate the success of the reference and each score-based choice. Tied scores use the mean success of the two choices. The report gives success estimates, signed reference-minus-model gaps, a world bootstrap interval and agreement where the reference ordering passes a paired sign test. The manifest records the label inputs and training settings, `weights.npz` stores the heads, and `scores.jsonl` stores evaluation scores by decision. Use larger development samples before interpreting differences between methods.

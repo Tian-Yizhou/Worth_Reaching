@@ -37,6 +37,20 @@ def _branch(args: argparse.Namespace) -> dict[str, object]:
     return label_branches(args.dataset, args.out, args.checkpoint, config)
 
 
+def _rank(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.models.action_ranking import run_ranking
+
+    return run_ranking(
+        args.dataset,
+        args.train_branches,
+        args.eval_branches,
+        args.out,
+        deadline=args.deadline,
+        iterations=args.iterations,
+        seed=args.seed,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="wr")
     commands = parser.add_subparsers(required=True)
@@ -67,12 +81,23 @@ def main() -> None:
     branching.add_argument("--horizon", type=int, default=16)
     branching.add_argument("--seed", type=int, default=0)
     branching.set_defaults(run=_branch, extra="craftax")
+    ranking = commands.add_parser(
+        "rank", help="Fit and evaluate paired action-ranking baselines"
+    )
+    ranking.add_argument("--dataset", type=Path, required=True)
+    ranking.add_argument("--train-branches", type=Path, required=True)
+    ranking.add_argument("--eval-branches", type=Path, required=True)
+    ranking.add_argument("--out", type=Path, required=True)
+    ranking.add_argument("--deadline", type=int, default=8)
+    ranking.add_argument("--iterations", type=int, default=100)
+    ranking.add_argument("--seed", type=int, default=0)
+    ranking.set_defaults(run=_rank, extra="craftax")
     args = parser.parse_args()
 
     try:
         summary = args.run(args)
     except ModuleNotFoundError as error:
-        if error.name not in {"gymnasium", "minigrid", "craftax", "jax"}:
+        if error.name not in {"gymnasium", "minigrid", "craftax", "jax", "numpy"}:
             raise
         parser.error(
             f"Install experiment dependencies with uv sync --locked --extra {args.extra}"
