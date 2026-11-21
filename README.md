@@ -6,7 +6,7 @@ Worth Reaching is a reinforcement learning research project about discovering in
 
 The project asks whether agents can discover reliably executable goals that are rare in demonstrations, and whether sequencing those goals improves terminal success. The evaluation measures both the probability of reaching an intermediate goal and the probability of finishing the task after attempting it. Matched simulator starts allow several choices to be tested with the same information and budget.
 
-The planned comparison tests learned regions against fixed latent neighborhoods, direct planning and human-defined milestones. The current implementation provides a deterministic MiniGrid evaluation pilot, a Craftax-Classic trajectory collector for random and pretrained PPO-RNN policies, and a replay test that completes the iron-pickaxe task from a natural start. [Implementation plan](PLAN.md) · [Architecture](docs/architecture.md)
+The planned comparison tests learned regions against fixed latent neighborhoods, direct planning and human-defined milestones. The current implementation includes a deterministic MiniGrid pilot, random and PPO-RNN trajectory collection in Craftax-Classic, and paired action branches that measure how a decision changes the chance of crafting the iron pickaxe. [Implementation plan](PLAN.md) · [Architecture](docs/architecture.md)
 
 ## Quick start
 
@@ -39,7 +39,7 @@ The default recipe records four random-policy episodes of at most 32 actions eac
 
 ### Longer server runs
 
-The experiment guide covers matched expert and random collection, the published PPO-RNN checkpoint, tmux commands and the output files. [Running experiments](docs/experiments.md)
+The experiment guide covers matched expert and random collection, the published PPO-RNN checkpoint, and paired action evaluation. [Running experiments](docs/experiments.md) · [Paired action branches](docs/experiments.md#paired-action-branches)
 
 ## Contributing
 

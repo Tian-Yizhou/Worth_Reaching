@@ -101,7 +101,14 @@ def test_replay_natural_iron_pickaxe_trajectory():
     pytest.importorskip("craftax")
     import jax
 
+    from worth_reaching.data.collection import episode_spec
     from worth_reaching.envs.craftax import CraftaxClassic
+    from worth_reaching.evaluation.craftax_branches import (
+        ACTION_IDS,
+        Decision,
+        replay_decision,
+        run_attempt,
+    )
 
     fixture = CONFIG.parents[2] / "tests/fixtures/craftax_iron_pickaxe.json"
     trace = json.loads(fixture.read_text(encoding="utf-8"))
@@ -109,10 +116,52 @@ def test_replay_natural_iron_pickaxe_trajectory():
     world_key = jax.random.key(trace["world_seed"])
     episode = env.reset(jax.random.fold_in(world_key, 0))
     transition_key = jax.random.fold_in(world_key, 1)
-    outcomes = [
-        episode.step(action, key=jax.random.fold_in(transition_key, index)).outcome
-        for index, action in enumerate(trace["actions"])
-    ]
+    recorded = {"initial_observation": episode.observation.tolist(), "steps": []}
+    outcomes = []
+    for index, action in enumerate(trace["actions"]):
+        step = episode.step(action, key=jax.random.fold_in(transition_key, index))
+        outcomes.append(step.outcome)
+        recorded["steps"].append(
+            {"action": action, "observation": step.observation.tolist()}
+        )
     assert outcomes[:-1] == [None] * (len(outcomes) - 1)
     assert len(outcomes) == 141
     assert outcomes[-1] == "success"
+
+    iron, noop = ACTION_IDS["make_iron_pickaxe"], ACTION_IDS["noop"]
+    decision = Decision(
+        episode_spec(trace["world_seed"], trace["source_policy"]),
+        prefix_steps=140,
+        remaining_actions=860,
+        horizon=2,
+        recorded_action=iron,
+        alternative_action=noop,
+    )
+
+    class CraftWhenCalled:
+        def initial_memory(self):
+            return jax.numpy.array(0)
+
+        def observe(self, observation, carry):
+            assert observation.shape == (1345,)
+            return carry + 1
+
+        def sample(self, observation, carry, key):
+            assert int(carry) == 141
+            return self.observe(observation, carry), iron
+
+    policy = CraftWhenCalled()
+    replayed, memory = replay_decision(env, decision, recorded, policy)
+    assert int(memory) == 141
+    snapshot = replayed.snapshot()
+    repeat_key = jax.random.key(1234)
+    for action, expected_steps in ((iron, 1), (noop, 2)):
+        result = run_attempt(
+            env.restore(snapshot), memory, policy, action, 2, repeat_key
+        )
+        assert result.outcome == "success"
+        assert result.steps == expected_steps
+    limited = run_attempt(env.restore(snapshot), memory, policy, noop, 1, repeat_key)
+    assert limited.outcome == "horizon_limit"
+    assert limited.remaining_actions == 859
+    assert replayed.snapshot() is snapshot

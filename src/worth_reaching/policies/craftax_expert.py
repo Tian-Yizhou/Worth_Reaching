@@ -60,15 +60,20 @@ class CraftaxExpert:
         # Match the actor in Craftax_Baselines. The critic is unused for collection.
         cell = nn.GRUCell(features=width)
 
-        @jax.jit
-        def sample(observation, carry, key):
+        def predict(observation, carry):
             encoded = jax.nn.relu(observation @ dense[0]["kernel"] + dense[0]["bias"])
             carry, hidden = cell.apply({"params": gates}, carry, encoded)
             for layer in dense[1:3]:
                 hidden = jax.nn.relu(hidden @ layer["kernel"] + layer["bias"])
             logits = hidden @ dense[3]["kernel"] + dense[3]["bias"]
+            return carry, logits
+
+        @jax.jit
+        def sample(observation, carry, key):
+            carry, logits = predict(observation, carry)
             return carry, jax.random.categorical(key, logits)
 
+        self._predict = jax.jit(predict)
         self._sample = sample
         digest = sha256()
         for leaf in jax.tree.leaves((dense, gates)):
@@ -88,20 +93,37 @@ class CraftaxExpert:
                 checkpoint_revision=provenance["revision"],
             )
 
+    def initial_memory(self) -> jax.Array:
+        return jnp.zeros(self._width, dtype=jnp.float32)
+
+    def _check_observation(self, observation: NDArray[np.float32]) -> None:
+        if observation.shape != (self.observation_size,):
+            raise ValueError(
+                "The checkpoint input does not match the symbolic observation"
+            )
+
+    def observe(self, observation: NDArray[np.float32], carry: jax.Array) -> jax.Array:
+        """Advance memory from a public observation without sampling an action."""
+        self._check_observation(observation)
+        return self._predict(observation, carry)[0]
+
+    def sample(
+        self, observation: NDArray[np.float32], carry: jax.Array, key: jax.Array
+    ) -> tuple[jax.Array, int]:
+        self._check_observation(observation)
+        memory, action = self._sample(observation, carry, key)
+        return memory, int(action)
+
     def start(self, world_seed: int) -> Callable[[NDArray[np.float32]], int]:
-        carry = jnp.zeros(self._width, dtype=jnp.float32)
+        carry = self.initial_memory()
         stream = jax.random.fold_in(jax.random.key(world_seed), 2)
         index = 0
 
         def act(observation: NDArray[np.float32]) -> int:
             nonlocal carry, index
-            if observation.shape != (self.observation_size,):
-                raise ValueError(
-                    "The checkpoint input does not match the symbolic observation"
-                )
             key = jax.random.fold_in(stream, index)
-            carry, action = self._sample(observation, carry, key)
+            carry, action = self.sample(observation, carry, key)
             index += 1
-            return int(action)
+            return action
 
         return act

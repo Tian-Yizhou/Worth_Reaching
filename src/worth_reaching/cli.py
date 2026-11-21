@@ -23,6 +23,20 @@ def _collect(args: argparse.Namespace) -> dict[str, object]:
     return collect(config, args.out, expert_checkpoint=args.expert_checkpoint)
 
 
+def _branch(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.craftax_branches import BranchConfig, label_branches
+
+    config = BranchConfig(
+        split=args.split,
+        decisions=args.decisions,
+        repeats=args.repeats,
+        lead=args.lead,
+        horizon=args.horizon,
+        seed=args.seed,
+    )
+    return label_branches(args.dataset, args.out, args.checkpoint, config)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="wr")
     commands = parser.add_subparsers(required=True)
@@ -40,6 +54,19 @@ def main() -> None:
     collection.add_argument("--seed-start", type=int)
     collection.add_argument("--expert-checkpoint", type=Path)
     collection.set_defaults(run=_collect, extra="craftax")
+    branching = commands.add_parser(
+        "branch", help="Evaluate paired Craftax action branches"
+    )
+    branching.add_argument("--dataset", type=Path, required=True)
+    branching.add_argument("--out", type=Path, required=True)
+    branching.add_argument("--checkpoint", type=Path, required=True)
+    branching.add_argument("--split", choices=("train", "dev", "test"), default="train")
+    branching.add_argument("--decisions", type=int, default=2)
+    branching.add_argument("--repeats", type=int, default=2)
+    branching.add_argument("--lead", type=int, default=8)
+    branching.add_argument("--horizon", type=int, default=16)
+    branching.add_argument("--seed", type=int, default=0)
+    branching.set_defaults(run=_branch, extra="craftax")
     args = parser.parse_args()
 
     try:

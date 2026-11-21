@@ -90,14 +90,18 @@ def _random_policy(seed: int) -> Callable[[NDArray[np.float32]], int]:
     return act
 
 
+def episode_keys(world_seed: int) -> tuple[jax.Array, jax.Array]:
+    root_key = jax.random.key(world_seed)
+    return jax.random.fold_in(root_key, 0), jax.random.fold_in(root_key, 1)
+
+
 def _collect_episode(
     env: CraftaxClassic,
     spec: EpisodeSpec,
     act: Callable[[NDArray[np.float32]], int],
 ) -> tuple[list, list, str]:
-    root_key = jax.random.key(spec.world_seed)
-    episode = env.reset(jax.random.fold_in(root_key, 0))
-    transitions_key = jax.random.fold_in(root_key, 1)
+    reset_key, transitions_key = episode_keys(spec.world_seed)
+    episode = env.reset(reset_key)
     initial = episode.observation.tolist()
     steps = []
     for index in range(env.budget):

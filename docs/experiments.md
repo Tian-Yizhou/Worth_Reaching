@@ -39,3 +39,37 @@ Attach with `tmux attach -t wr-craftax-expert` or `tmux attach -t wr-craftax-ran
 | `<run-name>.log` | Console output, stored next to the run directory when using the collection launcher |
 
 The collector writes `summary.json` after the trajectory file closes. Use the summary to identify completed runs and join the two policies' episode records by world ID through their split manifests.
+
+## Paired action branches
+
+`wr branch` replays a public history from a completed expert collection and restores the corresponding simulator state. The diagnostic selects the first successful episodes in the requested split and branches a fixed number of actions before their recorded success. A lead of eight places the forced action at the first of the final eight recorded steps. The two interventions are the recorded action and a no-op. If the recorded action is a no-op, the alternative is left.
+
+The same PPO-RNN checkpoint continues both arms from memory reconstructed over the public prefix. Each repeat uses fresh dynamics and policy keys, matched by step across the two arms. The horizon includes the forced action and is capped by the original budget remaining. Reaching the diagnostic horizon while still active is labeled `horizon_limit`. Success rates apply to the sampled decision histories and declared horizon.
+
+For a short CPU check, point `dataset` to a completed expert collection.
+
+```bash
+dataset=results/craftax-expert-20261121T082718Z-531436
+run_dir="$(mktemp -d results/craftax-branches.XXXXXX)/labels"
+JAX_PLATFORMS=cpu uv run --no-sync wr branch \
+  --dataset "$dataset" --checkpoint results/checkpoints/craftax-classic-ppo-rnn \
+  --split train --decisions 2 --repeats 2 --lead 8 --horizon 16 --out "$run_dir"
+```
+
+For the larger diagnostic, start a server tmux session and run the commands below inside it. The recipe schedules up to 3,200 attempts at 100 distinct training worlds.
+
+```bash
+tmux new-session -s wr-craftax-branches
+```
+
+```bash
+set -o pipefail
+dataset=results/craftax-expert-20261121T082718Z-531436
+run_root="$(mktemp -d results/craftax-branches.XXXXXX)"
+JAX_PLATFORMS=cpu uv run --no-sync wr branch \
+  --dataset "$dataset" --checkpoint results/checkpoints/craftax-classic-ppo-rnn \
+  --split train --decisions 100 --repeats 16 --lead 8 --horizon 16 \
+  --out "$run_root/labels" 2>&1 | tee "$run_root/run.log"
+```
+
+`decisions.jsonl` records the source episode, prefix length and two declared actions. `attempts.jsonl` records each action and repeat, elapsed steps, remaining actions and outcome. Join attempts by decision ID and repeat to compare the paired outcomes. For a shorter deadline, count successful attempts whose elapsed steps fit the deadline. `manifest.json` identifies the source run, split manifest and continuation checkpoint. The final `summary.json` records per-arm counts at the configured horizon, paired success outcomes and separate counts for replay and branch actions.
