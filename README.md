@@ -39,7 +39,7 @@ The default recipe records four random-policy episodes of at most 32 actions eac
 
 ### Longer server runs
 
-The experiment guide covers matched expert and random collection, the published PPO-RNN checkpoint, and paired action evaluation. [Running experiments](docs/experiments.md) · [Paired action branches](docs/experiments.md#paired-action-branches)
+The experiment guide covers matched expert and random collection, paired action evaluation, and a shared-bank scoring pilot for replay-derived waypoints. [Running experiments](docs/experiments.md) · [Waypoint scoring pilot](docs/experiments.md#shared-bank-waypoint-scoring-pilot)
 
 ## Contributing
 

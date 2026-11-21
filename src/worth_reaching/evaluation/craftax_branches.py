@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 from hashlib import sha256
 from importlib.metadata import version
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 import jax
 import numpy as np
@@ -26,6 +26,9 @@ from worth_reaching.envs.craftax import (
     CraftaxEpisode,
     Outcome,
 )
+
+if TYPE_CHECKING:
+    from worth_reaching.policies.craftax_expert import CraftaxExpert
 
 ACTION_IDS = {name: code for code, name in ACTION_NAMES.items()}
 SELECTION = "successful_expert_trace_fixed_lead_v1"
@@ -122,28 +125,40 @@ def _select_decisions(
 def replay_decision(
     env: CraftaxClassic, decision: Decision, trace: dict, policy: Continuation
 ) -> tuple[CraftaxEpisode, jax.Array]:
-    reset_key, transition_key = episode_keys(decision.source.world_seed)
+    episode, memory = replay_prefix(
+        env, decision.source, decision.prefix_steps, trace, policy
+    )
+    return episode, policy.observe(episode.observation, memory)
+
+
+def replay_prefix(
+    env: CraftaxClassic,
+    source: EpisodeSpec,
+    prefix_steps: int,
+    trace: dict,
+    policy: Continuation,
+) -> tuple[CraftaxEpisode, jax.Array]:
+    reset_key, transition_key = episode_keys(source.world_seed)
     episode = env.reset(reset_key)
     expected = trace["initial_observation"]
     memory = policy.initial_memory()
-    for index in range(decision.prefix_steps + 1):
+    for index in range(prefix_steps + 1):
         if not np.array_equal(
             episode.observation, np.asarray(expected, dtype=np.float32)
         ):
             raise ValueError(
-                f"Replay diverged at observation {index} for {decision.id}"
+                f"Replay diverged at observation {index} for {source.episode_id}"
             )
-        # Each action, including the intervention, consumes the preceding observation.
-        memory = policy.observe(episode.observation, memory)
-        if index == decision.prefix_steps:
+        if index == prefix_steps:
             break
+        memory = policy.observe(episode.observation, memory)
         recorded = trace["steps"][index]
         step = episode.step(
             recorded["action"], key=jax.random.fold_in(transition_key, index)
         )
         if step.outcome is not None:
             raise ValueError(
-                f"Replay terminated before the branch point for {decision.id}"
+                f"Replay terminated before the branch point for {source.episode_id}"
             )
         expected = recorded["observation"]
     return episode, memory
@@ -171,9 +186,15 @@ def run_attempt(
     return Attempt("horizon_limit", horizon, step.remaining_actions)
 
 
-def label_branches(
-    dataset: Path, out: Path, checkpoint: Path, config: BranchConfig
-) -> dict[str, object]:
+@dataclass(frozen=True, slots=True)
+class ExpertArchive:
+    env: CraftaxClassic
+    policy: "CraftaxExpert"
+    episodes: dict[str, EpisodeSpec]
+    provenance: dict[str, object]
+
+
+def load_expert_archive(dataset: Path, checkpoint: Path) -> ExpertArchive:
     from worth_reaching.policies.craftax_expert import CraftaxExpert
 
     required = ("summary.json", "manifest.json", "splits.json", "trajectories.jsonl.gz")
@@ -215,26 +236,42 @@ def label_branches(
         raise ValueError("Duplicate episode IDs in the split manifest")
     if len({episode.world_id for episode in episodes.values()}) != len(episodes):
         raise ValueError("Expected one source episode per world")
-    out.mkdir(parents=True, exist_ok=False)
-    write_json(
-        out / "manifest.json",
+    return ExpertArchive(
+        env,
+        policy,
+        episodes,
         {
             **compatibility,
-            "run_id": out.name,
-            "code_revision": code_revision(),
             "source_dataset": str(dataset),
             "source_run_id": source["run_id"],
             "source_manifest_sha256": sha256(manifest_bytes).hexdigest(),
             "source_splits_sha256": sha256(split_bytes).hexdigest(),
             "continuation_policy": policy.policy_id,
             "policy_metadata": policy.metadata,
+        },
+    )
+
+
+def label_branches(
+    dataset: Path, out: Path, checkpoint: Path, config: BranchConfig
+) -> dict[str, object]:
+    archive = load_expert_archive(dataset, checkpoint)
+    out.mkdir(parents=True, exist_ok=False)
+    write_json(
+        out / "manifest.json",
+        {
+            **archive.provenance,
+            "run_id": out.name,
+            "code_revision": code_revision(),
             "selection": SELECTION,
             "alternative": "noop_or_left",
             "sampling": "fresh_paired_continuations",
             "config": asdict(config),
         },
     )
-    summary = _run_decisions(env, dataset, out, episodes, policy, config)
+    summary = _run_decisions(
+        archive.env, dataset, out, archive.episodes, archive.policy, config
+    )
     write_json(out / "summary.json", summary)
     return summary
 

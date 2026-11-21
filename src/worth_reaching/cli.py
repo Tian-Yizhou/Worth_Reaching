@@ -51,6 +51,30 @@ def _rank(args: argparse.Namespace) -> dict[str, object]:
     )
 
 
+def _waypoint_pilot(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.craftax_waypoints import (
+        RADIUS,
+        WaypointConfig,
+        run_waypoint_pilot,
+    )
+
+    config = WaypointConfig(
+        worlds=args.worlds,
+        repeats=args.repeats,
+        slip_probability=args.slip_probability,
+        seed=args.seed,
+        split=args.split,
+        horizon=args.horizon,
+        skip_worlds=args.skip_worlds,
+        offer_expert=args.offer_expert,
+        prefix_steps=args.prefix_steps,
+        source_outcome=args.source_outcome
+        or ("success" if args.prefix_steps is None else "any"),
+        region_radius=RADIUS if args.region_radius is None else args.region_radius,
+    )
+    return run_waypoint_pilot(args.dataset, args.checkpoint, args.out, config)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="wr")
     commands = parser.add_subparsers(required=True)
@@ -92,6 +116,38 @@ def main() -> None:
     ranking.add_argument("--iterations", type=int, default=100)
     ranking.add_argument("--seed", type=int, default=0)
     ranking.set_defaults(run=_rank, extra="craftax")
+    waypoints = commands.add_parser(
+        "waypoint-pilot", help="Compare shared-bank waypoint scores"
+    )
+    waypoints.add_argument("--dataset", type=Path, required=True)
+    waypoints.add_argument("--checkpoint", type=Path, required=True)
+    waypoints.add_argument("--out", type=Path, required=True)
+    waypoints.add_argument("--split", choices=("train", "dev"), default="dev")
+    waypoints.add_argument("--worlds", type=int, default=6)
+    waypoints.add_argument("--repeats", type=int, default=4)
+    waypoints.add_argument("--slip-probability", type=float, default=0.0)
+    waypoints.add_argument("--seed", type=int, default=0)
+    waypoints.add_argument("--horizon", type=int, default=24)
+    waypoints.add_argument("--skip-worlds", type=int, default=0)
+    waypoints.add_argument(
+        "--offer-expert",
+        action="store_true",
+        help="Calibrate expert as a shared option",
+    )
+    waypoints.add_argument(
+        "--prefix-steps", type=int, help="Use a fixed number of recorded prefix actions"
+    )
+    waypoints.add_argument(
+        "--source-outcome",
+        choices=("any", "success", "death", "timeout"),
+        help="Source cohort (default: success for relative starts, any for fixed starts)",
+    )
+    waypoints.add_argument(
+        "--region-radius",
+        type=float,
+        help="Mean absolute observation radius (default: 0.002)",
+    )
+    waypoints.set_defaults(run=_waypoint_pilot, extra="craftax")
     args = parser.parse_args()
 
     try:
