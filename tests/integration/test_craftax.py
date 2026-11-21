@@ -95,3 +95,24 @@ def test_craftax_branch_replay_and_terminal_labels():
         mobs = branch.snapshot().cows
         mob_patterns.add(np.asarray(mobs.mask).tobytes())
     assert len(mob_patterns) > 1
+
+
+def test_replay_natural_iron_pickaxe_trajectory():
+    pytest.importorskip("craftax")
+    import jax
+
+    from worth_reaching.envs.craftax import CraftaxClassic
+
+    fixture = CONFIG.parents[2] / "tests/fixtures/craftax_iron_pickaxe.json"
+    trace = json.loads(fixture.read_text(encoding="utf-8"))
+    env = CraftaxClassic(budget=trace["budget"])
+    world_key = jax.random.key(trace["world_seed"])
+    episode = env.reset(jax.random.fold_in(world_key, 0))
+    transition_key = jax.random.fold_in(world_key, 1)
+    outcomes = [
+        episode.step(action, key=jax.random.fold_in(transition_key, index)).outcome
+        for index, action in enumerate(trace["actions"])
+    ]
+    assert outcomes[:-1] == [None] * (len(outcomes) - 1)
+    assert len(outcomes) == 141
+    assert outcomes[-1] == "success"

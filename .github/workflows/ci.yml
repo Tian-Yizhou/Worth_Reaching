@@ -30,9 +30,9 @@ jobs:
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync ruff format --check src tests
       - run: uv run --no-sync pytest
-      - run: uv run --no-sync wr pilot --config configs/minigrid/keycorridor.toml --out "$RUNNER_TEMP/keycorridor"
+      - run: uv run --no-sync wr pilot --config configs/minigrid/keycorridor.toml --out results/ci/keycorridor
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: keycorridor-pilot
-          path: ${{ runner.temp }}/keycorridor
+          path: results/ci/keycorridor
           if-no-files-found: error

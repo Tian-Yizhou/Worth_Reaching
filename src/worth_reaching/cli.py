@@ -6,18 +6,21 @@ from pathlib import Path
 
 
 def _run_pilot(args: argparse.Namespace) -> dict[str, object]:
-    from worth_reaching.runner import PilotConfig, run_pilot
+    from worth_reaching.evaluation.keycorridor import PilotConfig, run_pilot
 
     return run_pilot(PilotConfig.load(args.config), args.out)
 
 
 def _collect(args: argparse.Namespace) -> dict[str, object]:
-    from worth_reaching.collection import CollectionConfig, collect
+    from worth_reaching.data.collection import CollectionConfig, collect
 
     config = CollectionConfig.load(
-        args.config, episodes=args.episodes, budget=args.budget
+        args.config,
+        episodes=args.episodes,
+        budget=args.budget,
+        seed_start=args.seed_start,
     )
-    return collect(config, args.out)
+    return collect(config, args.out, expert_checkpoint=args.expert_checkpoint)
 
 
 def main() -> None:
@@ -34,6 +37,8 @@ def main() -> None:
     collection.add_argument("--out", type=Path, required=True)
     collection.add_argument("--episodes", type=int)
     collection.add_argument("--budget", type=int)
+    collection.add_argument("--seed-start", type=int)
+    collection.add_argument("--expert-checkpoint", type=Path)
     collection.set_defaults(run=_collect, extra="craftax")
     args = parser.parse_args()
 

@@ -1,88 +1,56 @@
 # Worth Reaching
 
-Worth Reaching studies how an agent given a distant terminal objective can discover and sequence intermediate goals in a learned latent space. A goal is a region that can admit several different histories. A useful region offers the current controller feasible ways to enter it, and attempting it improves the prospect of completing the task.
+Worth Reaching is a reinforcement learning research project about discovering intermediate goals for long-horizon tasks. Its first benchmark asks an agent to craft an iron pickaxe in Craftax-Classic within a fixed action budget. Different routes can leave the agent with similar opportunities to finish, even when their positions or inventories differ. We study whether a learned latent region can represent those opportunities and guide the agent's next decision.
 
-Consider an agent trying to craft an iron pickaxe before nightfall. Several visible positions may offer iron. Approaching one may leave enough health and time to finish crafting, while approaching another may exhaust the agent. A latent waypoint could represent a family of positions from which the next step is feasible. We want to know whether a model can discover that distinction, act on it, and revise the plan when new observations arrive.
+## Research contribution
 
-## The first paper
+The project asks whether agents can discover reliably executable goals that are rare in demonstrations, and whether sequencing those goals improves terminal success. The evaluation measures both the probability of reaching an intermediate goal and the probability of finishing the task after attempting it. Matched simulator starts allow several choices to be tested with the same information and budget.
 
-1. **Can the agent discover regions that are rare in demonstrations and reliable to execute?** Compare demonstration support with the outcomes of repeated, predeclared attempts.
-2. **Can the agent plan from a distant final goal by choosing its own intermediate regions?** Compare learned regions, fixed latent neighborhoods, flat planning and designer milestones under matched information and budgets.
+The planned comparison tests learned regions against fixed latent neighborhoods, direct planning and human-defined milestones. The current implementation provides a deterministic MiniGrid evaluation pilot, a Craftax-Classic trajectory collector for random and pretrained PPO-RNN policies, and a replay test that completes the iron-pickaxe task from a natural start. [Implementation plan](PLAN.md) · [Architecture](docs/architecture.md)
 
-The project evaluates three ways to propose regions. A conditional generator learns from unsegmented demonstrations. Online RL improves a pretrained flow proposer using terminal outcomes. A hierarchical world model uses coarse predictions of candidate macro-actions to propose regions for fine-scale execution. Director demonstrated learned latent goals in Crafter. Our experiments test what makes a region useful and when it improves end-to-end planning. [Director](https://danijar.com/project/director/) · [Hierarchical Planning with Latent World Models](https://arxiv.org/abs/2604.03208)
+## Quick start
 
-The proposed first benchmark is Craftax-Classic with symbolic observations. MiniGrid provides a small diagnostic task. Balatro motivates a later test involving variable-size inventories, ordered interactions and irreversible purchases. The first experiment can proceed independently of the Balatro simulator.
+Use Python 3.12 or newer and run the commands below from the repository root. Both examples run on CPU. [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
 
-## Project documents
-
-| Document | Use |
-| --- | --- |
-| [Implementation plan](PLAN.md) | Development milestones, dependencies and evidence for completion |
-| [Architecture](docs/architecture.md) | Proposed components, data contracts and information boundaries |
-| [Environment choices](docs/experiment_env.md) | Candidate environments, adaptations and reasons to select each |
-| [Contributing](CONTRIBUTING.md) | Development workflow and reproducibility rules |
-| [Agent instructions](AGENTS.md) | Entry point for assistants working in this repository |
-
-## Development setup
-
-The project uses uv and requires Python 3.12 or newer. Install uv and sync the locked CPU dependencies. [uv installation](https://docs.astral.sh/uv/getting-started/installation/)
+### Run the KeyCorridor pilot
 
 ```bash
 uv sync --locked --group dev --extra minigrid
-uv run --no-sync ruff check .
-uv run --no-sync ruff format --check src tests
-uv run --no-sync pytest
-```
-
-## Run the KeyCorridor pilot
-
-```bash
-run_dir="$(mktemp -d)/keycorridor"
+mkdir -p results
+run_dir="$(mktemp -d results/minigrid-smoke.XXXXXX)/keycorridor"
 uv run --no-sync wr pilot --config configs/minigrid/keycorridor.toml --out "$run_dir"
+cat "$run_dir/summary.json"
 ```
 
-The fixed seed and 12-action prefix leave the agent in the open doorway, facing north with two actions remaining. Forcing `right` lets the fixed continuation policy pick up the ball on the last action. Forcing `forward` spends a step against the wall and the episode times out as the policy turns. Expected outcomes are `right: success` and `forward: timeout`. [KeyCorridor environment](https://minigrid.farama.org/environments/babyai/KeyCorridor/)
+The pilot replays one starting history and applies two different actions before handing control to the same policy. Turning right leads to success on the final step. Moving forward consumes a step against a wall and leads to timeout.
 
-The run directory contains `manifest.json` with the resolved configuration, simulator versions and interaction counts, `prefix.json` with the recorded public trajectory, `attempts.jsonl` with the two branches, and `summary.json` with the outcome counts. The tests rerun the CLI, compare both public traces byte for byte, and perturb a hidden tile while checking that policy input stays identical.
-
-## Collect Craftax-Classic trajectories
-
-The adapter uses Craftax-Classic Symbolic with the native 17-action space and a fixed action budget. The first transition that earns the iron-pickaxe achievement is success, including on the final allowed action. Death from depleted health or lava takes precedence over timeout. The adapter reads the terminal transition from the native environment before any reset. [Craftax implementation](https://github.com/MichaelTMatthews/Craftax)
-
-Run the short CPU check from the repository root. The default recipe collects four random-policy episodes with at most 32 actions each.
+### Collect Craftax-Classic trajectories
 
 ```bash
 uv sync --locked --group dev --extra minigrid --extra craftax
-JAX_PLATFORMS=cpu uv run --no-sync pytest
+mkdir -p results
+run_dir="$(mktemp -d results/craftax-smoke.XXXXXX)/craftax"
 JAX_PLATFORMS=cpu uv run --no-sync wr collect \
-  --config configs/craftax/iron_pickaxe.toml --out "$(mktemp -d)/craftax"
+  --config configs/craftax/iron_pickaxe.toml --out "$run_dir"
+cat "$run_dir/summary.json"
 ```
 
-Each run writes the versioned configuration in `manifest.json`, the world assignments in `splits.json`, one complete public trajectory per line in `trajectories.jsonl.gz`, and the final outcome and interaction counts in `summary.json`. The split manifest is written before collecting any episode. A stable hash of the world identity assigns about 80% of worlds to train, 10% to dev and 10% to test. Overlapping seed ranges reuse the same world and split. Use a different `seed_start` in the TOML file to collect additional worlds. A run is complete when its summary is present.
+The default recipe records four random-policy episodes of at most 32 actions each. Each run saves the public trajectories, world splits and terminal outcomes under the repository's Git-ignored `results/` directory.
 
 ### Longer server runs
 
-Start a tmux session on the server. From the repository root inside that session, run the commands below. The example reserves at most one million environment actions. Use a new output name for each collection.
+The experiment guide covers matched expert and random collection, the published PPO-RNN checkpoint, tmux commands and the output files. [Running experiments](docs/experiments.md)
+
+## Contributing
+
+Choose a focused change from the implementation plan and include a reproducible check. For the full CPU test suite, install both environment extras as shown in the Craftax quick start. [Contribution guide](CONTRIBUTING.md) · [Implementation plan](PLAN.md)
 
 ```bash
-tmux new-session -s craftax-collect
+uv run --no-sync ruff check .
+uv run --no-sync ruff format --check src tests scripts
+JAX_PLATFORMS=cpu uv run --no-sync pytest
 ```
 
-```bash
-export WR_ARTIFACTS="${WR_ARTIFACTS:-$HOME/wr-artifacts}"
-mkdir -p "$WR_ARTIFACTS"
-uv sync --locked --group dev --extra minigrid --extra craftax
-run_dir="$WR_ARTIFACTS/craftax-$(date -u +%Y%m%dT%H%M%SZ)"
-set -o pipefail
-JAX_PLATFORMS=cpu uv run --no-sync wr collect \
-  --config configs/craftax/iron_pickaxe.toml --episodes 1000 --budget 1000 \
-  --out "$run_dir" 2>&1 | tee "$run_dir.log"
-```
+## Acknowledgments
 
-Keep raw trajectories, logs and checkpoints in `WR_ARTIFACTS`. To include the small run metadata in a Mac handoff, copy selected files after collection finishes.
-
-```bash
-share_dir="local-file/results/$(basename "$run_dir")"
-mkdir -p "$share_dir"
-cp "$run_dir/manifest.json" "$run_dir/splits.json" "$run_dir/summary.json" "$share_dir/"
-```
+Worth Reaching uses MiniGrid for diagnostic tasks and Craftax for the main benchmark. Its expert collector uses the Craftax-Classic PPO-RNN weights released with the ReMDM Planner project. [MiniGrid](https://minigrid.farama.org/) · [Craftax](https://proceedings.mlr.press/v235/matthews24a.html) · [ReMDM Planner](https://github.com/mathisweil/craftax-ReMDM-planner)

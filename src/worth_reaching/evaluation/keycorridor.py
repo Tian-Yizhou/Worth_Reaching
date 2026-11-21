@@ -7,8 +7,8 @@ from dataclasses import asdict, dataclass
 from importlib.metadata import version
 from pathlib import Path
 
-from worth_reaching.artifacts import code_revision, write_json
 from worth_reaching.contracts import Action
+from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.envs.minigrid import (
     CONTINUATION_ID,
     ENVIRONMENT_ID,

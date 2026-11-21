@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def code_revision() -> dict[str, str | bool | None]:
-    repo = Path(__file__).resolve().parents[2]
+    repo = Path(__file__).resolve().parents[3]
     try:
         revision = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=repo, text=True, stderr=subprocess.DEVNULL
