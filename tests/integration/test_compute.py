@@ -1,7 +1,6 @@
 import json
 import os
 import subprocess
-import sys
 
 import pytest
 
@@ -38,7 +37,16 @@ def test_device_cli_shards_a_padded_batch_on_the_cpu_mesh(tmp_path):
     config = tmp_path / "cpu.toml"
     config.write_text('[compute]\nplatform = "cpu"\n', encoding="utf-8")
     report = subprocess.run(
-        ["wr", "--compute-config", config, "devices", "--batch-size", "5"],
+        [
+            "wr",
+            "--compute-config",
+            config,
+            "devices",
+            "--framework",
+            "jax",
+            "--batch-size",
+            "5",
+        ],
         env={**os.environ, "JAX_NUM_CPU_DEVICES": "3"},
         check=True,
         capture_output=True,
@@ -52,37 +60,33 @@ def test_device_cli_shards_a_padded_batch_on_the_cpu_mesh(tmp_path):
     assert result["mean_squared"] == 6.0
 
 
-def test_partitioned_optimizer_update_agrees_with_one_device(tmp_path):
-    pytest.importorskip("jax")
-    pytest.importorskip("flax")
-    import numpy as np
+def test_lightning_batch_padding_preserves_the_sampled_global_batch():
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("lightning")
+    from worth_reaching.models.training import RandomBatches, UpdateBatches
 
-    script = """\
-import sys
-import jax
-import numpy as np
-from worth_reaching.models import gcbc, parallel
-_, state = gcbc.initialize(8, seed=7, learning_rate=0.0003)
-rng = np.random.default_rng(12)
-data = tuple(rng.standard_normal(x).astype(np.float32) for x in ((5, 29), (5, 29), (5, 8)))
-tensors, valid = parallel.shard_batch(data)
-state = gcbc.update(parallel.replicate(state), *tensors, valid)
-leaves = jax.tree.leaves(state.params)
-assert all(leaf.is_fully_replicated for leaf in leaves)
-assert all(len(leaf.addressable_shards) == int(sys.argv[1]) for leaf in leaves)
-np.save(sys.argv[2], np.concatenate([np.asarray(leaf).ravel() for leaf in leaves]))
-"""
-    weights = []
-    for count in (1, 3):
-        path = tmp_path / f"{count}.npy"
-        subprocess.run(
-            [sys.executable, "-c", script, str(count), path],
-            env={
-                **os.environ,
-                "JAX_PLATFORMS": "cpu",
-                "JAX_NUM_CPU_DEVICES": str(count),
-            },
-            check=True,
-        )
-        weights.append(np.load(path))
-    np.testing.assert_allclose(*weights, atol=1e-7, rtol=1e-6)
+    data = torch.arange(13)
+    sample = RandomBatches((data,), 5, (7,))
+    (reference,), single_mask = UpdateBatches(sample, 4, 0, 1)[3]
+    shards = [UpdateBatches(sample, 4, rank, 3)[3] for rank in range(3)]
+    values = torch.stack([batch[0] for batch, _ in shards], dim=1).flatten()
+    mask = torch.stack([valid for _, valid in shards], dim=1).flatten()
+    assert single_mask.all()
+    assert torch.equal(reference, values[mask])
+    assert mask.tolist() == [True, True, True, True, True, False]
+
+
+def test_devices_reports_lightning_by_default(tmp_path):
+    pytest.importorskip("lightning")
+    config = tmp_path / "cpu.toml"
+    config.write_text('[compute]\nplatform = "cpu"\n', encoding="utf-8")
+    report = subprocess.run(
+        ["wr", "--compute-config", config, "devices"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = json.loads(report.stdout)
+    assert result["framework"] == "pytorch-lightning"
+    assert result["backend"] == "cpu"
+    assert result["device_count"] == 1

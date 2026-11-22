@@ -1,27 +1,23 @@
 """Predict and sample masked continuous-control trajectories in latent space."""
 
 from dataclasses import dataclass
-from functools import partial
+from pathlib import Path
 
-import jax
-import jax.numpy as jnp
 import numpy as np
-import optax
-from flax import linen as nn
-from flax.training.train_state import TrainState
+import torch
+from torch import Tensor, nn
 
 from worth_reaching.data.maze_windows import CompletionContext, MaskedBatch
-from worth_reaching.models import route_flow
-from worth_reaching.models.completion import (
-    ObservationCodec,
-    encode_observations,
-    fit_codec_step,
-)
-from worth_reaching.models.parallel import (
-    mean_squared,
-    replicate,
-    shard_batch,
-    single_device,
+from worth_reaching.models import flow
+from worth_reaching.models.codec import ObservationCodec, mlp, reconstruction
+from worth_reaching.models.training import (
+    RandomBatches,
+    regression,
+    stage_resume,
+    stream_seed,
+    tensor,
+    train_stage,
+    weights,
 )
 
 
@@ -64,71 +60,48 @@ class CompletionConfig:
 
 
 class LatentTrajectory(nn.Module):
-    width: int
-    queries: int
-    latent_size: int
+    def __init__(self, input_size: int, config: CompletionConfig):
+        super().__init__()
+        self.queries = config.queries
+        self.latent_size = config.latent_size
+        self.net = mlp(
+            input_size, config.width, self.queries * self.latent_size, layers=3
+        )
 
-    @nn.compact
-    def __call__(self, features: jax.Array) -> jax.Array:
-        for _ in range(3):
-            features = nn.gelu(nn.Dense(self.width)(features))
-        latent = nn.Dense(self.queries * self.latent_size)(features)
-        return latent.reshape(-1, self.queries, self.latent_size)
+    def forward(self, features: Tensor) -> Tensor:
+        return self.net(features).reshape(-1, self.queries, self.latent_size)
 
 
-@partial(jax.jit, static_argnames=("codec", "max_horizon"))
+@torch.no_grad()
 def public_features(
     codec: ObservationCodec,
-    weights: dict,
     context: CompletionContext,
     mean: np.ndarray,
     scale: np.ndarray,
     max_horizon: int,
-) -> jax.Array:
-    observations = (context.observations - mean) / scale
-    goal = (context.goal - mean) / scale
-    history = encode_observations(codec, weights, observations)
-    history = jnp.where(context.present[..., None], history, 0)
-    actions = jnp.where(context.present[..., None], context.incoming_actions, 0)
-    goal_latent = encode_observations(codec, weights, goal)
-    count = len(goal)
-    return jnp.concatenate(
+) -> Tensor:
+    observations = tensor((context.observations - mean) / scale)
+    goal = tensor((context.goal - mean) / scale)
+    present = torch.as_tensor(context.present)
+    history = codec.encode(observations).masked_fill(~present[..., None], 0)
+    actions = tensor(context.incoming_actions).masked_fill(~present[..., None], 0)
+    return torch.cat(
         (
-            history.reshape(count, -1),
-            actions.reshape(count, -1),
-            context.present,
-            goal_latent,
+            history.flatten(1),
+            actions.flatten(1),
+            present,
+            codec.encode(goal),
             observations[:, -1, :2],
             goal[:, :2],
-            context.remaining[:, None] / max_horizon,
-            context.offsets / max_horizon,
+            tensor(context.remaining[:, None]) / max_horizon,
+            tensor(context.offsets) / max_horizon,
         ),
-        axis=-1,
+        dim=-1,
     )
 
 
-@jax.jit
-def _fit_predictor(state: TrainState, features, target, valid) -> TrainState:
-    def objective(params):
-        return mean_squared(state.apply_fn(params, features) - target, valid)
-
-    return state.apply_gradients(grads=jax.grad(objective)(state.params))
-
-
-@partial(jax.jit, static_argnames=("predictor",))
-def _predict(
-    predictor: LatentTrajectory, weights: dict, features: jax.Array
-) -> jax.Array:
-    return predictor.apply(weights, features)
-
-
-@partial(jax.jit, static_argnames=("codec",))
-def _decode(codec: ObservationCodec, weights: dict, latent: jax.Array) -> jax.Array:
-    return codec.apply(weights, latent, method=codec.decode)
-
-
-def _flow_condition(features: jax.Array, forecast: jax.Array) -> jax.Array:
-    return jnp.concatenate((features, forecast.reshape(len(forecast), -1)), axis=-1)
+def _flow_condition(features: Tensor, forecast: Tensor) -> Tensor:
+    return torch.cat((features, forecast.flatten(1)), dim=-1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,62 +109,60 @@ class LearnedCompletion:
     config: CompletionConfig
     codec: ObservationCodec
     predictor: LatentTrajectory
-    flow: route_flow.RouteFlow
-    weights: dict
+    flow: flow.RouteFlow
     mean: np.ndarray
     scale: np.ndarray
-    flow_scale: jax.Array
+    flow_scale: Tensor
 
-    def forecast(self, context: CompletionContext) -> tuple[jax.Array, jax.Array]:
+    @property
+    def weights(self) -> dict:
+        return {
+            "codec": weights(self.codec),
+            "predictor": weights(self.predictor),
+            "flow": weights(self.flow),
+        }
+
+    @torch.no_grad()
+    def forecast(self, context: CompletionContext) -> tuple[Tensor, Tensor]:
         features = public_features(
-            self.codec,
-            self.weights["codec"],
-            context,
-            self.mean,
-            self.scale,
-            self.config.max_horizon,
+            self.codec, context, self.mean, self.scale, self.config.max_horizon
         )
-        return features, _predict(self.predictor, self.weights["predictor"], features)
+        return features, self.predictor(features)
 
-    def decode(self, latent: jax.Array) -> np.ndarray:
-        return np.asarray(
-            _decode(self.codec, self.weights["codec"], latent) * self.scale + self.mean
-        )
+    @torch.no_grad()
+    def decode(self, latent: Tensor) -> np.ndarray:
+        return self.codec.decode(latent).numpy() * self.scale + self.mean
 
     def propose(
-        self, context: CompletionContext, key: jax.Array
+        self, context: CompletionContext, seed: int
     ) -> tuple[np.ndarray, np.ndarray]:
         features, forecast = self.forecast(context)
-        routes = self._sample(features, forecast, key)
-        return np.asarray(routes), self.decode(routes)
+        routes = self._sample(features, forecast, seed)
+        return routes.numpy(), self.decode(routes)
 
-    def _sample(
-        self, features: jax.Array, forecast: jax.Array, key: jax.Array
-    ) -> jax.Array:
-        return route_flow.sample(
+    def _sample(self, features: Tensor, forecast: Tensor, seed: int) -> Tensor:
+        return flow.sample(
             self.flow,
-            self.weights["flow"],
             forecast,
             _flow_condition(features, forecast),
             self.flow_scale,
-            key,
+            seed,
             candidates=self.config.candidates,
             steps=12,
         )
 
+    @torch.no_grad()
     def validate(
         self, batch: MaskedBatch, *, compare_xy: bool = True
     ) -> dict[str, float]:
         features, forecast = self.forecast(batch.context)
-        target = encode_observations(
-            self.codec, self.weights["codec"], (batch.targets - self.mean) / self.scale
-        )
+        target = self.codec.encode(tensor((batch.targets - self.mean) / self.scale))
         reconstructed = self.decode(target)
         metrics = {
             "normalized_reconstruction_mse": float(
                 np.mean(np.square((reconstructed - batch.targets) / self.scale))
             ),
-            "latent_prediction_mse": float(jnp.square(forecast - target).mean()),
+            "latent_prediction_mse": float((forecast - target).square().mean()),
         }
         if not compare_xy:
             return {
@@ -206,7 +177,7 @@ class LearnedCompletion:
         samples = self._sample(
             features,
             forecast,
-            jax.random.fold_in(jax.random.key(self.config.seed), 802),
+            stream_seed(self.config.seed, 802),
         )
         sampled_errors = np.linalg.norm(
             self.decode(samples)[..., :2] - replay_xy[:, None], axis=-1
@@ -241,57 +212,47 @@ def fit(
     mean: np.ndarray,
     scale: np.ndarray,
     config: CompletionConfig,
+    out: Path,
+    resume: Path | None = None,
 ) -> LearnedCompletion:
-    codec = ObservationCodec(
-        config.width, config.latent_size, training.targets.shape[-1]
+    targets = tensor((training.targets - mean) / scale)
+    observations = targets.flatten(0, 1)
+    torch.manual_seed(stream_seed(config.seed, 601))
+    codec = ObservationCodec(config.width, config.latent_size, observations.shape[-1])
+    codec = train_stage(
+        codec,
+        RandomBatches((observations,), config.batch_size, (config.seed, 601)),
+        reconstruction,
+        steps=config.codec_updates,
+        learning_rate=0.001,
+        out=out / "codec",
+        resume=stage_resume(resume, "codec"),
     )
-    predictor = LatentTrajectory(config.width, config.queries, config.latent_size)
-    codec_key, predictor_key = jax.random.split(jax.random.key(config.seed))
-    targets = (training.targets - mean) / scale
-    observations = targets.reshape(-1, targets.shape[-1])
-    optimizer = optax.adam(0.001)
-    codec_state = replicate(
-        TrainState.create(
-            apply_fn=codec.apply,
-            params=codec.init(codec_key, observations[:1]),
-            tx=optimizer,
-        )
+    features = public_features(codec, training.context, mean, scale, config.max_horizon)
+    with torch.no_grad():
+        encoded_targets = codec.encode(targets)
+    torch.manual_seed(stream_seed(config.seed, 602))
+    predictor = train_stage(
+        LatentTrajectory(features.shape[-1], config),
+        RandomBatches(
+            (features, encoded_targets), config.batch_size, (config.seed, 602)
+        ),
+        regression,
+        steps=config.predictor_updates,
+        learning_rate=0.001,
+        out=out / "predictor",
+        resume=stage_resume(resume, "predictor"),
     )
-    codec_rng = np.random.default_rng([config.seed, 601])
-    for _ in range(config.codec_updates):
-        rows = codec_rng.integers(len(observations), size=config.batch_size)
-        batch, valid = shard_batch(observations[rows])
-        codec_state = fit_codec_step(codec_state, batch, valid)
-    codec_weights = single_device(codec_state.params)
-    features = public_features(
-        codec, codec_weights, training.context, mean, scale, config.max_horizon
-    )
-    encoded_targets = encode_observations(codec, codec_weights, targets)
-    state = replicate(
-        TrainState.create(
-            apply_fn=predictor.apply,
-            params=predictor.init(predictor_key, features[:1]),
-            tx=optimizer,
-        )
-    )
-    predictor_rng = np.random.default_rng([config.seed, 602])
-    for _ in range(config.predictor_updates):
-        rows = predictor_rng.integers(len(features), size=config.batch_size)
-        batch, valid = shard_batch((features[rows], encoded_targets[rows]))
-        state = _fit_predictor(state, *batch, valid)
-    predictor_weights = single_device(state.params)
-    forecast = _predict(predictor, predictor_weights, features)
-    flow, flow_weights, flow_scale = route_flow.fit(
+    with torch.no_grad():
+        forecast = predictor(features)
+    generator, flow_scale = flow.fit(
         _flow_condition(features, forecast),
         encoded_targets - forecast,
         seed=config.seed,
         updates=config.flow_updates,
+        out=out / "flow",
+        resume=stage_resume(resume, "flow"),
     )
-    weights = {
-        "codec": codec_weights,
-        "predictor": predictor_weights,
-        "flow": flow_weights,
-    }
     return LearnedCompletion(
-        config, codec, predictor, flow, weights, mean, scale, flow_scale
+        config, codec, predictor, generator, mean, scale, flow_scale
     )

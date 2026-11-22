@@ -7,7 +7,6 @@ from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
 
-import jax
 import numpy as np
 from flax import serialization
 
@@ -16,9 +15,15 @@ from worth_reaching.data.completion import CompletionInput
 from worth_reaching.envs import grid_routes as grid
 from worth_reaching.evaluation import grid_execution as execution
 from worth_reaching.evaluation.attempt_selection import fit_attempt_heads
-from worth_reaching.models import route_flow
+from worth_reaching.models import flow
 from worth_reaching.models.completion import pack_inputs
-from worth_reaching.models.parallel import describe
+from worth_reaching.models.training import (
+    describe,
+    stream_seed,
+    tensor,
+    validate_resume,
+    weights,
+)
 
 ARRIVAL_FLOOR = 0.25
 SLIP = 0.15
@@ -114,15 +119,12 @@ def _case_inputs(starts):
 def _condition(completion, inputs):
     packed = pack_inputs(inputs, completion.spec, completion.config)
     forecast = completion.forecast(packed)
-    return forecast, route_flow.route_conditions(
-        packed, forecast, len(completion.spec.goals)
-    )
+    return forecast, flow.route_conditions(packed, forecast, len(completion.spec.goals))
 
 
-def _propose(completion, model, weights, scale, forecast, conditions, key, count):
-    latents = route_flow.sample(
+def _propose(completion, model, scale, forecast, conditions, key, count):
+    latents = flow.sample(
         model,
-        weights,
         forecast,
         conditions,
         scale,
@@ -316,12 +318,20 @@ def _write_rows(path: Path, rows) -> None:
             stream.write(json.dumps(row, separators=(",", ":")) + "\n")
 
 
-def run(checkpoint: Path, flow_run: Path, out: Path, config: FeedbackConfig) -> dict:
+def run(
+    checkpoint: Path,
+    flow_run: Path,
+    out: Path,
+    config: FeedbackConfig,
+    *,
+    resume: Path | None = None,
+) -> dict:
     completion = execution.load_grid_completion(checkpoint)
     flow_manifest = json.loads((flow_run / "manifest.json").read_text(encoding="utf-8"))
     checkpoint_hash = sha256((checkpoint / "weights.msgpack").read_bytes()).hexdigest()
     if (
-        flow_manifest.get("schema") != "grid_latent_route_attempts_v1"
+        flow_manifest.get("schema")
+        not in {"grid_latent_route_attempts_v1", "grid_latent_route_attempts_v2"}
         or flow_manifest.get("checkpoint_weights_sha256") != checkpoint_hash
         or flow_manifest.get("layout_split_seed") != grid.SPLIT_SEED
     ):
@@ -330,8 +340,10 @@ def run(checkpoint: Path, flow_run: Path, out: Path, config: FeedbackConfig) -> 
         )
     flow_bytes = (flow_run / "flow.msgpack").read_bytes()
     payload = serialization.msgpack_restore(flow_bytes)
-    weights, scale = payload["params"], payload["scale"]
-    model = route_flow.RouteFlow((grid.BUDGET - 1) * completion.config.latent_size)
+    scale = tensor(payload["scale"])
+    model = flow.load_parameters(
+        (grid.BUDGET - 1) * completion.config.latent_size, payload["params"]
+    )
     starts = grid.grid_starts(
         include_test=config.split == "test", include_reference=True
     )
@@ -340,18 +352,39 @@ def run(checkpoint: Path, flow_run: Path, out: Path, config: FeedbackConfig) -> 
     if config.layouts is not None:
         evaluation = evaluation[: config.layouts * len(grid.STARTS)]
     cases = _case_inputs(evaluation)
-    key = jax.random.key(config.seed)
+    out.mkdir(parents=True, exist_ok=False)
+    write_json(
+        out / "manifest.json",
+        {
+            "schema": "grid_route_feedback_v2",
+            "compute": describe(),
+            "code_revision": code_revision(),
+            "config": asdict(config),
+            "checkpoint_sha256": checkpoint_hash,
+            "flow_checkpoint_sha256": sha256(flow_bytes).hexdigest(),
+            "base_flow_run": str(flow_run.resolve()),
+            "ordinary_slip": SLIP,
+            "arrival_floor": ARRIVAL_FLOOR,
+            "layouts": {
+                name: sorted({grid.layout_id(world.world_id) for world, _ in group})
+                for name, group in {
+                    "train": starts["train"],
+                    config.split: evaluation,
+                    "reference": starts["reference"],
+                }.items()
+            },
+        },
+    )
     train_forecast, train_context = _condition(
         completion, [public for _, public in train]
     )
     training_latents, training_paths = _propose(
         completion,
         model,
-        weights,
         scale,
         train_forecast,
         train_context,
-        jax.random.fold_in(key, 201),
+        stream_seed(config.seed, 201),
         config.candidates,
     )
     train_masks = _streams(config, len(train), training=True)
@@ -361,7 +394,7 @@ def run(checkpoint: Path, flow_run: Path, out: Path, config: FeedbackConfig) -> 
         training_latents,
         training_paths,
         train_masks,
-        scale,
+        scale.numpy(),
     )
     reranker = fit_attempt_heads(training_rows)
     demonstration_public, observations, _ = execution._demonstrations(
@@ -383,9 +416,8 @@ def run(checkpoint: Path, flow_run: Path, out: Path, config: FeedbackConfig) -> 
     source_indices = np.asarray(sources)
     feedback_targets = np.asarray(targets, dtype=np.float32)
     credit_mask = np.asarray(credit, dtype=np.float32)
-    continued, updated = route_flow.refine(
+    continued, updated = flow.refine(
         model,
-        weights,
         demo_context,
         demo_residual,
         train_context[source_indices],
@@ -394,6 +426,8 @@ def run(checkpoint: Path, flow_run: Path, out: Path, config: FeedbackConfig) -> 
         probability,
         seed=config.seed,
         updates=config.updates,
+        out=out / "checkpoints",
+        resume=validate_resume(out, resume),
     )
     _, _, reference = execution._demonstrations(starts["reference"], reference=True)
     rare = {
@@ -415,21 +449,19 @@ def run(checkpoint: Path, flow_run: Path, out: Path, config: FeedbackConfig) -> 
                 _optimal_policy(goal, passages, config.passage_slip),
             )
         )
-    out.mkdir(parents=True, exist_ok=False)
     arms, choices = {}, {}
-    for name, params in (
-        ("frozen", weights),
+    for name, generator in (
+        ("frozen", model),
         ("demonstrations", continued),
         ("feedback", updated),
     ):
         _, decoded = _propose(
             completion,
-            model,
-            params,
+            generator,
             scale,
             forecast,
             conditions,
-            jax.random.fold_in(key, 202),
+            stream_seed(config.seed, 202),
             config.candidates,
         )
         rows, choices[name], arms[name] = _evaluate(
@@ -458,9 +490,9 @@ def run(checkpoint: Path, flow_run: Path, out: Path, config: FeedbackConfig) -> 
     (out / "weights.msgpack").write_bytes(
         serialization.to_bytes(
             {
-                "demonstrations": continued,
-                "feedback": updated,
-                "scale": scale,
+                "demonstrations": weights(continued),
+                "feedback": weights(updated),
+                "scale": scale.numpy(),
             }
         )
     )
@@ -471,28 +503,7 @@ def run(checkpoint: Path, flow_run: Path, out: Path, config: FeedbackConfig) -> 
         attempt=reranker.attempt,
         reach=reranker.reach,
     )
-    write_json(
-        out / "manifest.json",
-        {
-            "schema": "grid_route_feedback_v1",
-            "compute": describe(),
-            "code_revision": code_revision(),
-            "config": asdict(config),
-            "checkpoint_sha256": checkpoint_hash,
-            "flow_checkpoint_sha256": sha256(flow_bytes).hexdigest(),
-            "base_flow_run": str(flow_run.resolve()),
-            "ordinary_slip": SLIP,
-            "arrival_floor": ARRIVAL_FLOOR,
-            "layouts": {
-                name: sorted({grid.layout_id(world.world_id) for world, _ in group})
-                for name, group in {
-                    "train": starts["train"],
-                    config.split: evaluation,
-                    "reference": starts["reference"],
-                }.items()
-            },
-        },
-    )
+
     summary = {
         "evaluation_cases": len(cases),
         "training_cases": len(train),

@@ -3,11 +3,11 @@
 from collections import deque
 from collections.abc import Callable
 
-import jax
 import numpy as np
 
 from worth_reaching.data.maze_windows import CompletionContext, query_offsets
 from worth_reaching.models.maze_completion import LearnedCompletion
+from worth_reaching.models.training import stream_seed
 
 Policy = Callable[[np.ndarray, np.ndarray], np.ndarray]
 
@@ -19,7 +19,7 @@ class RecedingGoals:
         self,
         actor: Policy,
         completion: LearnedCompletion,
-        key: jax.Array,
+        key: int,
         limit: int,
         *,
         action_size: int,
@@ -65,7 +65,7 @@ class RecedingGoals:
             observations, actions, present, goal[None], duration, offsets
         )
         routes, decoded = self.completion.propose(
-            context, jax.random.fold_in(self.key, self.step)
+            context, stream_seed(self.key, self.step)
         )
         if not np.isfinite(routes).all() or not np.isfinite(decoded).all():
             raise ValueError("Latent planner produced a non-finite candidate")

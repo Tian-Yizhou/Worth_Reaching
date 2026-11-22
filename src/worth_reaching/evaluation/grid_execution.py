@@ -6,16 +6,21 @@ from dataclasses import asdict, dataclass
 from hashlib import sha256
 from pathlib import Path
 
-import jax
 import numpy as np
 from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.data.completion import CompletionInput
 from worth_reaching.envs import grid_routes as grid
-from worth_reaching.models import route_flow
-from worth_reaching.models.completion import ModelSpec, pack_inputs
-from worth_reaching.models.parallel import describe
+from worth_reaching.models import flow
+from worth_reaching.models.completion import FrozenCompletion, ModelSpec, pack_inputs
+from worth_reaching.models.training import (
+    describe,
+    stage_resume,
+    stream_seed,
+    validate_resume,
+    weights,
+)
 
 DEMONSTRATION_SEED = 8112
 FAR_ROUTE_RATE = 0.25
@@ -336,8 +341,8 @@ def summarize(decisions: list[dict], reference: Counter) -> dict[str, object]:
     }
 
 
-def load_grid_completion(checkpoint: Path) -> route_flow.FrozenCompletion:
-    completion = route_flow.FrozenCompletion.load(checkpoint)
+def load_grid_completion(checkpoint: Path) -> FrozenCompletion:
+    completion = FrozenCompletion.load(checkpoint)
     spec = ModelSpec(8, grid.ACTION_COUNT, grid.GOALS, grid.BUDGET)
     if (
         completion.spec != spec
@@ -351,7 +356,9 @@ def load_grid_completion(checkpoint: Path) -> route_flow.FrozenCompletion:
     return completion
 
 
-def run(checkpoint: Path, out: Path, config: ExecutionConfig) -> dict[str, object]:
+def run(
+    checkpoint: Path, out: Path, config: ExecutionConfig, *, resume: Path | None = None
+) -> dict[str, object]:
     completion = load_grid_completion(checkpoint)
     spec = completion.spec
     starts = grid.grid_starts(
@@ -368,26 +375,56 @@ def run(checkpoint: Path, out: Path, config: ExecutionConfig) -> dict[str, objec
     training, targets, training_counts = _demonstrations(
         starts["train"], reference=False
     )
+    out.mkdir(parents=True, exist_ok=False)
+    write_json(
+        out / "manifest.json",
+        {
+            "schema": "grid_latent_route_attempts_v2",
+            "compute": describe(),
+            "config": asdict(config),
+            "code_revision": code_revision(),
+            "checkpoint": str(checkpoint.resolve()),
+            "checkpoint_weights_sha256": sha256(
+                (checkpoint / "weights.msgpack").read_bytes()
+            ).hexdigest(),
+            "training_demonstrations": dict(training_counts),
+            "demonstration_seed": DEMONSTRATION_SEED,
+            "far_route_sampling_probability": FAR_ROUTE_RATE,
+            "flow_steps": FLOW_STEPS,
+            "layout_split_seed": grid.SPLIT_SEED,
+            "low_support_threshold": LOW_SUPPORT,
+            "joint_arrival_terminal_threshold": RELIABLE,
+            "layouts": {
+                key: sorted({grid.layout_id(world.world_id) for world, _ in rows})
+                for key, rows in {
+                    "train": starts["train"],
+                    "reference": starts["reference"],
+                    config.split: evaluation,
+                }.items()
+            },
+        },
+    )
     _, _, reference_counts = _demonstrations(starts["reference"], reference=True)
     packed = pack_inputs(training, spec, completion.config)
     forecast = completion.forecast(packed)
-    conditions = route_flow.route_conditions(packed, forecast, len(spec.goals))
-    model, weights, scale = route_flow.fit(
+    conditions = flow.route_conditions(packed, forecast, len(spec.goals))
+    model, scale = flow.fit(
         conditions,
         completion.encode(targets) - forecast,
         seed=config.seed,
         updates=config.updates,
+        out=out / "checkpoints" / "flow",
+        resume=stage_resume(validate_resume(out, resume), "flow"),
     )
     packed = pack_inputs([public for _, public in cases], spec, completion.config)
     forecast = completion.forecast(packed)
-    conditions = route_flow.route_conditions(packed, forecast, len(spec.goals))
-    samples = route_flow.sample(
+    conditions = flow.route_conditions(packed, forecast, len(spec.goals))
+    samples = flow.sample(
         model,
-        weights,
         forecast,
         conditions,
         scale,
-        jax.random.fold_in(jax.random.key(config.seed), 8113),
+        stream_seed(config.seed, 8113),
         candidates=config.candidates,
         steps=FLOW_STEPS,
     )
@@ -397,7 +434,6 @@ def run(checkpoint: Path, out: Path, config: ExecutionConfig) -> dict[str, objec
     if not np.isfinite(decoded).all() or not np.isfinite(sample_decoded).all():
         raise ValueError("Route prediction produced non-finite observations")
     forecast, samples = map(np.asarray, (forecast, samples))
-    out.mkdir(parents=True, exist_ok=False)
     rng = np.random.default_rng([config.seed, 8114])
     decisions = []
     for index, (world_id, public) in enumerate(cases):
@@ -425,36 +461,9 @@ def run(checkpoint: Path, out: Path, config: ExecutionConfig) -> dict[str, objec
         for decision in decisions:
             stream.write(json.dumps(decision, separators=(",", ":")) + "\n")
     (out / "flow.msgpack").write_bytes(
-        serialization.to_bytes({"params": weights, "scale": scale})
+        serialization.to_bytes({"params": weights(model), "scale": scale.numpy()})
     )
-    write_json(
-        out / "manifest.json",
-        {
-            "schema": "grid_latent_route_attempts_v1",
-            "compute": describe(),
-            "config": asdict(config),
-            "code_revision": code_revision(),
-            "checkpoint": str(checkpoint.resolve()),
-            "checkpoint_weights_sha256": sha256(
-                (checkpoint / "weights.msgpack").read_bytes()
-            ).hexdigest(),
-            "training_demonstrations": dict(training_counts),
-            "demonstration_seed": DEMONSTRATION_SEED,
-            "far_route_sampling_probability": FAR_ROUTE_RATE,
-            "flow_steps": FLOW_STEPS,
-            "layout_split_seed": grid.SPLIT_SEED,
-            "low_support_threshold": LOW_SUPPORT,
-            "joint_arrival_terminal_threshold": RELIABLE,
-            "layouts": {
-                key: sorted({grid.layout_id(world.world_id) for world, _ in rows})
-                for key, rows in {
-                    "train": starts["train"],
-                    "reference": starts["reference"],
-                    config.split: evaluation,
-                }.items()
-            },
-        },
-    )
+
     summary = summarize(decisions, reference_counts)
     write_json(out / "summary.json", summary)
     return summary

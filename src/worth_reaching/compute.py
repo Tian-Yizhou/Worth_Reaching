@@ -1,4 +1,4 @@
-"""Resolve device visibility before importing JAX."""
+"""Resolve device visibility before loading numerical backends."""
 
 import os
 import tomllib
@@ -53,6 +53,11 @@ class ComputeConfig:
 
     def apply(self) -> None:
         inherited = os.environ.get("CUDA_VISIBLE_DEVICES")
+        os.environ["WR_TRAINING_PLATFORM"] = "gpu" if self.gpus else self.platform
+        if self.gpus is None:
+            os.environ.pop("WR_TRAINING_GPU_COUNT", None)
+        else:
+            os.environ["WR_TRAINING_GPU_COUNT"] = str(len(self.gpus))
         if self.platform == "cpu":
             os.environ["JAX_PLATFORMS"] = "cpu"
         elif self.platform == "gpu" or self.gpus is not None:

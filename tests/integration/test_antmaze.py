@@ -253,7 +253,6 @@ def test_official_success_on_last_action_overrides_timeout():
 
 def test_candidate_probe_changes_only_first_attempt():
     pytest.importorskip("ogbench")
-    jax = pytest.importorskip("jax")
     np = pytest.importorskip("numpy")
     from worth_reaching.evaluation.maze_planning import RecedingGoals
     from worth_reaching.models.maze_completion import CompletionConfig
@@ -273,10 +272,8 @@ def test_candidate_probe_changes_only_first_attempt():
 
     observation = np.zeros(29)
     goal = np.full(29, 3.0)
-    primary = RecedingGoals(actor, Completion(), jax.random.key(7), 6, action_size=8)
-    alternate = RecedingGoals(
-        actor, Completion(), jax.random.key(7), 6, action_size=8, first_route=1
-    )
+    primary = RecedingGoals(actor, Completion(), 7, 6, action_size=8)
+    alternate = RecedingGoals(actor, Completion(), 7, 6, action_size=8, first_route=1)
     assert [primary(observation, goal)[0] for _ in range(6)] == [1, 1, 1, 1, 3, 3]
     assert [alternate(observation, goal)[0] for _ in range(6)] == [2, 2, 1, 1, 3, 3]
     assert [row["selected_route"] for row in alternate.plans] == [1, 0, 0]

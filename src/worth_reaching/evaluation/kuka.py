@@ -7,7 +7,6 @@ from dataclasses import asdict
 from importlib.metadata import version
 from pathlib import Path
 
-import jax
 import numpy as np
 from flax import serialization
 
@@ -26,7 +25,7 @@ from worth_reaching.models.maze_completion import (
     LearnedCompletion,
     fit,
 )
-from worth_reaching.models.parallel import describe
+from worth_reaching.models.training import describe, stream_seed, validate_resume
 
 
 def _context(
@@ -57,7 +56,7 @@ def rollout(
     state, order = env.reset(seed)
     goal = stack_goal(state, order, BLOCK_HEIGHT)
     config = model.config
-    plan_key = jax.random.fold_in(jax.random.key(config.seed), seed)
+    plan_key = stream_seed(config.seed, seed)
     history = deque([state], maxlen=config.history)
     recorded, plans = [state], []
     target, deadline, placement_score = state, 0, 0.0
@@ -66,9 +65,7 @@ def rollout(
         if step == deadline and remaining > config.queries:
             context = _context(history, goal, remaining, config)
             if sampled:
-                latents, decoded = model.propose(
-                    context, jax.random.fold_in(plan_key, step)
-                )
+                latents, decoded = model.propose(context, stream_seed(plan_key, step))
             else:
                 _, forecast = model.forecast(context)
                 latents, decoded = (
@@ -132,6 +129,7 @@ def run(
     split: str,
     repeats: int,
     limit: int,
+    resume: Path | None = None,
 ) -> dict:
     if (
         not config.queries < limit <= ACTION_LIMIT
@@ -146,7 +144,7 @@ def run(
         write_json(
             out / "manifest.json",
             {
-                "schema": "diffuser_kuka_conditional_v1",
+                "schema": "diffuser_kuka_conditional_v2",
                 "upstream_revision": REVISION,
                 "versions": {name: version(name) for name in ("gymnasium", "pybullet")},
                 "training": asdict(config),
@@ -155,6 +153,9 @@ def run(
                 "code_revision": code_revision(),
                 "demonstration_clips": {
                     key: len(group["clips"]) for key, group in demos.items()
+                },
+                "demonstrations_sha256": {
+                    key: group["sha256"] for key, group in demos.items()
                 },
             },
         )
@@ -171,7 +172,14 @@ def run(
         scale = np.maximum(
             train.observations.std(axis=0, dtype=np.float64), 1e-3
         ).astype(np.float32)
-        model = fit(batch, mean, scale, config)
+        model = fit(
+            batch,
+            mean,
+            scale,
+            config,
+            out / "checkpoints",
+            validate_resume(out, resume),
+        )
         heldout = sample_windows(
             validation, np.random.default_rng(801), 512, **settings
         )
@@ -183,7 +191,7 @@ def run(
                     **model.weights,
                     "mean": mean,
                     "scale": scale,
-                    "flow_scale": model.flow_scale,
+                    "flow_scale": model.flow_scale.numpy(),
                 }
             )
         )

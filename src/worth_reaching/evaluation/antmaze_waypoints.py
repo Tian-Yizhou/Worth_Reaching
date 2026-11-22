@@ -5,7 +5,6 @@ from dataclasses import asdict, dataclass
 from hashlib import file_digest
 from pathlib import Path
 
-import jax
 import numpy as np
 
 from worth_reaching.data.artifacts import code_revision, write_json
@@ -158,7 +157,7 @@ def run(
             "weights_sha256": weights_sha256,
             "normalization_sha256": normalization_sha256,
             "start_source": str(start_bank.resolve()) if start_bank else None,
-            "jax_backend": jax.default_backend(),
+            "inference_backend": "pytorch_cpu",
             "code_revision": code_revision(),
         },
     )

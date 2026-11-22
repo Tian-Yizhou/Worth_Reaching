@@ -10,14 +10,14 @@ The planned comparison evaluates generated routes against direct execution and r
 
 ## Quick start
 
-Use Python 3.12 or newer and run the commands below from the repository root. Install the environment extras for the experiments you plan to run. On an NVIDIA Linux server, include `--extra cuda12` to enable GPU training. [Install uv](https://docs.astral.sh/uv/getting-started/installation/) · [Compute configuration](docs/experiments.md#compute-devices)
+Use Python 3.12 or newer and run the commands below from the repository root. On an NVIDIA Linux server, use `--extra training` for PyTorch Lightning with CUDA. On a CPU machine, use `--extra training-cpu`. Install the environment extras for the experiments you plan to run. [Install uv](https://docs.astral.sh/uv/getting-started/installation/) · [Compute configuration](docs/experiments.md#compute-devices)
 
 ```bash
-uv sync --locked --group dev --extra minigrid --extra craftax --extra ogbench --extra pointmaze --extra cuda12
+uv sync --locked --group dev --extra training --extra minigrid --extra craftax --extra ogbench --extra pointmaze
 uv run --no-sync wr devices
 ```
 
-JAX automatically uses the available backend. Training uses every visible device by default. Edit a local copy of `configs/compute.toml` to select devices and pass it with `wr --compute-config PATH`.
+Lightning uses every visible GPU by default. Edit a local copy of `configs/compute.toml` to select devices and pass it with `wr --compute-config PATH`. Craftax collection runs on JAX and can use the optional `cuda12` extra. [Resume a training run](docs/experiments.md#resume-training)
 
 ### Run the KeyCorridor pilot
 
@@ -155,10 +155,10 @@ uv run --no-sync wr puzzle-latent --board 4x4 --out "$run_dir/4x4" --eval-repeat
 Choose a focused change from the implementation plan and include a reproducible check. Install the environment extras for the full CPU test suite. [Contribution guide](CONTRIBUTING.md) · [Implementation plan](PLAN.md)
 
 ```bash
-uv sync --locked --group dev --extra minigrid --extra craftax --extra ogbench --extra pointmaze
+uv sync --locked --group dev --extra training-cpu --extra minigrid --extra craftax --extra ogbench --extra pointmaze
 uv run --no-sync ruff check .
 uv run --no-sync ruff format --check src tests scripts
-JAX_PLATFORMS=cpu uv run --no-sync pytest
+CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu uv run --no-sync pytest
 ```
 
 ## Acknowledgments

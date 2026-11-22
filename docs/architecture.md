@@ -21,6 +21,7 @@ The `src/worth_reaching/` package groups code by responsibility.
 | `envs/` | Versioned simulator adaptations and terminal task rules |
 | `data/` | Collect complete public trajectories, validate world splits and export masked training and development windows |
 | `models/` | Encode observations, predict masked latent positions and sample residual trajectories |
+| `models/training.py` | Configure Lightning trainers, step-indexed batches, checkpoints and logs |
 | `policies/` | Recurrent expert inference from public observations |
 | `evaluation/` | Replay, matched continuations, shared-bank comparisons and paired route scoring |
 | `cli.py` | Connect configurations to collection, window export, training and evaluation |
@@ -29,7 +30,7 @@ The trajectory completion model will use public data from `data/`. Its executor 
 
 ## Training on multiple devices
 
-The Flax training steps use JAX's native automatic parallelization. A local `data` mesh shards the leading axis of each global training batch and replicates parameters and Optax state. JAX compiles the globally normalized losses and cross-device reductions. Padding makes the physical batch divisible by the mesh size while its mask preserves the requested global sample count. Checkpoints retain global tensor shapes and can be restored with a different device count. Evaluation keeps serial simulator execution and a single device for model inference. [JAX automatic parallelization](https://docs.jax.dev/en/latest/parallel.html) · [Compute configuration](experiments.md#compute-devices)
+New model training uses PyTorch Lightning. Lightning runs DDP on one host and manages checkpointing and logging for each stage. A step-indexed sampler supplies the same global batch across device counts. A row mask excludes padding, and the loss uses the global count of valid elements to preserve its weighting under DDP. A stateful dataloader saves its cursor with the optimizer and model. The process that launches training handles serial simulator evaluation after the workers finish. Craftax simulation and the released expert policy use JAX. [Lightning Trainer](https://lightning.ai/docs/pytorch/stable/core-api/trainer) · [Compute configuration](experiments.md#compute-devices)
 
 ## Execution and data contracts
 

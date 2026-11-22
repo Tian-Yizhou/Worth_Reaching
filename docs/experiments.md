@@ -25,14 +25,14 @@ Use a new output directory for each run. Keep long collection and training runs 
 
 ## Compute devices
 
-On supported NVIDIA Linux machines, install the locked CUDA 12 extra with the environment extras you need. On CPU machines, omit `--extra cuda12` from the same install command. Use `uv run --no-sync` after installation to reuse the selected extras. [JAX CUDA installation](https://docs.jax.dev/en/latest/installation.html#nvidia-gpu)
+Install `training` for the locked PyTorch CUDA build on Linux, or `training-cpu` for CPU development and CI. Use `uv run --no-sync` after installation to reuse the selected extras. Add `cuda12` when you also need GPU acceleration for JAX Craftax collection. [JAX CUDA installation](https://docs.jax.dev/en/latest/installation.html#nvidia-gpu) · [PyTorch installation](https://pytorch.org/get-started/locally/)
 
 ```bash
-uv sync --locked --group dev --extra minigrid --extra craftax --extra ogbench --extra cuda12
+uv sync --locked --group dev --extra training --extra minigrid --extra craftax --extra ogbench
 uv run --no-sync wr devices
 ```
 
-The defaults in `configs/compute.toml` use `platform = "auto"` and `gpus = "all"`. JAX uses all visible GPUs when CUDA is available and falls back to CPU on CPU-only hosts. Explicit GPU selections report an error if the requested devices are unavailable. Use `platform = "cpu"` for a CPU run.
+The defaults in `configs/compute.toml` use `platform = "auto"` and `gpus = "all"`. Lightning uses all visible GPUs when CUDA is available and falls back to CPU on CPU-only hosts. Explicit GPU selections report an error if the requested devices are unavailable. Use `platform = "cpu"` for a CPU run.
 
 Copy the configuration to `local-file/compute.toml` for a machine-specific override. An explicit `--compute-config` takes precedence over `WR_COMPUTE_CONFIG`, which takes precedence over the repository default. For a two-GPU run, a local file can contain:
 
@@ -46,9 +46,21 @@ gpus = [0, 2]
 uv run --no-sync wr --compute-config local-file/compute.toml devices
 ```
 
-Indices are zero-based within any existing `CUDA_VISIBLE_DEVICES` list. The configuration never expands that list. With no launcher mask, the default CUDA ordering is PCI bus order. CUDA renumbers the selected devices inside the process, and the report includes the effective visibility mask. Add the same global flag before any experiment command, or export `WR_COMPUTE_CONFIG` for a tmux session. The `devices` command runs a sharded reduction and reports the rows placed on each device.
+Indices are zero-based within any existing `CUDA_VISIBLE_DEVICES` list. The configuration never expands that list. With no launcher mask, the default CUDA ordering is PCI bus order. CUDA renumbers the selected devices inside the process, and the report includes the effective visibility mask. Add the same global flag before any experiment command, or export `WR_COMPUTE_CONFIG` for a tmux session. Run `wr devices --framework jax` to check the Craftax backend.
 
-The completion predictor, route flow, feedback update and AntMaze GCBC trainer use JAX data parallelism on a single host. Batch size is global, so the same update uses the same number of training examples on one, two or more devices. Run manifests record the detected backend, device count and visibility mask. Simulator rollout loops execute serially. [JAX automatic parallelization](https://docs.jax.dev/en/latest/parallel.html)
+The completion predictor, route flow, feedback update and GCBC trainer use Lightning's single-host DDP. Batch size is global, so each update uses the same examples on one or more devices. Run manifests record the framework, backend, device count and visibility mask. Simulator rollout loops execute serially. [Lightning distributed strategies](https://lightning.ai/docs/pytorch/stable/reference/accelerators/gpu_intermediate)
+
+## Resume training
+
+Each stage writes Lightning checkpoints and CSV metrics under `checkpoints/<stage>/` in the run directory. The trainer saves `last.ckpt` at the checkpoint interval and `final.ckpt` at completion. Pass `--resume PREVIOUS_RUN` with the original data and settings and a new `--out` directory. Completed stages load their final weights, interrupted stages resume from their latest checkpoint, and evaluation runs after training.
+
+```bash
+old_run=results/pointmaze-diffuser.example/umaze
+new_run="$(mktemp -d results/pointmaze-resume.XXXXXX)/umaze"
+uv run --no-sync wr pointmaze-latent --task umaze --resume "$old_run" --out "$new_run"
+```
+
+Add any non-default flags from the original run to the resume command. Published Flax GCBC and grid weights remain readable for frozen inference. Resumption with optimizer state uses a Lightning checkpoint. The experiments use the configured update budgets. [Lightning checkpoint format](https://lightning.ai/docs/pytorch/stable/reference/common/checkpointing_basic)
 
 ## Collect Craftax trajectories
 
@@ -156,7 +168,7 @@ uv run --no-sync wr antmaze-gcbc \
 
 Reuse `starts.npz` across comparisons with the same evaluation split and repeat count. The bank stores the exact reset observations, goals and integration state. The default evaluates four repeats for each task on development seeds with the 1,000-action horizon. Use `--eval-split test` after locking the recipe. Lower `--eval-steps` or `--eval-repeats` for smoke runs. A success comes from the benchmark's binary success event. The episode log also stores the initial, closest and final Euclidean distances in public XY coordinates.
 
-Each run saves its recipe and archive hashes in `manifest.json`, validation checkpoints in `history.json`, parameters and normalization separately, full optimizer state in `training.msgpack`, and exact starts and outcomes in `starts.npz` and `episodes.json`. To resume, pass `--resume PREVIOUS_RUN`, use the same training recipe and archives, specify a new output directory and set `--updates` to the new total. Setting that total to the checkpoint step reruns evaluation at the saved weights. The batch stream is indexed by update so it resumes at the same batch as an uninterrupted run.
+Each run saves its recipe and archive hashes in `manifest.json`, validation checkpoints in `history.json`, parameters and normalization separately, full optimizer state under `checkpoints/executor/`, and exact starts and outcomes in `starts.npz` and `episodes.json`. To resume, pass `--resume PREVIOUS_RUN`, use the same training recipe and archives, specify a new output directory and set `--updates` to the new total. Setting that total to the checkpoint step reruns evaluation at the saved weights. The batch stream is indexed by update so it resumes at the same batch as an uninterrupted run.
 
 ## Run learned latent planning in AntMaze
 
@@ -202,7 +214,7 @@ Diffuser's Maze2D experiment uses endpoint conditioning with four state coordina
 | `large` | `PointMaze_Large-v3` | 800 | [`D4RL/pointmaze/large-v2`](https://minari.farama.org/datasets/D4RL/pointmaze/large-v2/#evaluation-environment-specs) |
 
 ```bash
-uv sync --locked --extra pointmaze
+uv sync --locked --extra training --extra pointmaze
 export MINARI_DATASETS_PATH="$PWD/results/datasets/minari"
 mkdir -p results
 run_dir="$(mktemp -d results/pointmaze-diffuser.XXXXXX)"
@@ -215,7 +227,7 @@ for task in umaze medium large; do
 done
 ```
 
-Include `--extra pointmaze` alongside any installed extras you want to keep, including `--extra cuda12` for GPU. Each Minari archive contains a continuing collection. The loader uses the first 80% of episodes by ID for fitting, skips the boundary episode and holds out the suffix for offline reconstruction and prediction diagnostics. The evaluator uses paired seeded resets on the fixed-goal, continuing task. Both arms use the task's action limit and the same position and velocity controller. Use `--eval-steps` for a shorter run. Direct execution tracks the terminal goal. Latent execution uses the earliest decoded state of the first sampled route and replans when the queried time offset elapses. Terminal success means the native success event occurred by the action limit. Sparse return is summed across the whole episode, including success steps. Use `--eval-split test` after fixing the recipe.
+Include `--extra pointmaze` alongside any installed extras you want to keep. Each Minari archive contains a continuing collection. The loader uses the first 80% of episodes by ID for fitting, skips the boundary episode and holds out the suffix for offline reconstruction and prediction diagnostics. The evaluator uses paired seeded resets on the fixed-goal, continuing task. Both arms use the task's action limit and the same position and velocity controller. Use `--eval-steps` for a shorter run. Direct execution tracks the terminal goal. Latent execution uses the earliest decoded state of the first sampled route and replans when the queried time offset elapses. Terminal success means the native success event occurred by the action limit. Sparse return is summed across the whole episode, including success steps. Use `--eval-split test` after fixing the recipe.
 
 The run stores the data hashes and versions in `manifest.json`, archive episode IDs in `split.json`, sampled latent and decoded routes in `plans.jsonl.gz`, executed public states in `trajectories.npz`, and scores in `episodes.json` and `summary.json`.
 
@@ -224,7 +236,7 @@ The run stores the data hashes and versions in `manifest.json`, archive episode 
 Install the locked `stacking` extra alongside your existing extras. PyBullet builds from source on Linux with CPython 3.12, using a C/C++ compiler and Python development headers. A uv-managed Python 3.12 installation supplies those headers when the system installation lacks them.
 
 ```bash
-uv sync --locked --group dev --extra minigrid --extra craftax --extra ogbench --extra pointmaze --extra stacking --extra cuda12
+uv sync --locked --group dev --extra training --extra minigrid --extra craftax --extra ogbench --extra pointmaze --extra stacking
 bash scripts/prepare_diffuser_kuka.sh
 run_dir="$(mktemp -d results/diffuser-kuka.pilot.XXXXXX)"
 uv run --no-sync wr kuka-latent --out "$run_dir/conditional"
@@ -238,7 +250,7 @@ The run records `manifest.json`, the clip split and hashes, latent and decoded p
 
 ## Run state-based OGBench Scene
 
-Install the locked `ogbench` extra and include `--extra cuda12` for CUDA training. With the default compute configuration, `wr devices` reports the selected backend and all visible GPUs. The Scene executor and completion model both use the same JAX data-parallel training path. Evaluation steps the MuJoCo environment on the host. [Compute configuration](#compute-devices)
+Install the locked `ogbench` extra and select a Lightning training extra. With the default compute configuration, `wr devices` reports the selected backend and all visible GPUs. The Scene executor and completion model both use the same Lightning training path. Evaluation steps the MuJoCo environment on the host. [Compute configuration](#compute-devices)
 
 ```bash
 uv run --no-sync python -c 'import ogbench; ogbench.download_datasets(["scene-play-v0"], dataset_dir="results/datasets/ogbench")'

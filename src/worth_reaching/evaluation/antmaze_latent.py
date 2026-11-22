@@ -6,7 +6,6 @@ from dataclasses import asdict
 from hashlib import file_digest
 from pathlib import Path
 
-import jax
 import numpy as np
 from flax import serialization
 
@@ -27,7 +26,7 @@ from worth_reaching.evaluation.antmaze import (
 from worth_reaching.evaluation.maze_planning import RecedingGoals
 from worth_reaching.models.gcbc import load_policy
 from worth_reaching.models.maze_completion import CompletionConfig, fit
-from worth_reaching.models.parallel import describe
+from worth_reaching.models.training import describe, stream_seed, validate_resume
 
 
 def _fingerprint(path: Path) -> str:
@@ -71,6 +70,7 @@ def run(
     start_bank: Path | None,
     *,
     probe_first_candidates: bool = False,
+    resume: Path | None = None,
 ) -> dict:
     if dataset not in DATASETS or evaluation.action_limit <= config.queries:
         raise ValueError(
@@ -87,7 +87,7 @@ def run(
     write_json(
         out / "manifest.json",
         {
-            "schema": "antmaze_latent_completion_v1",
+            "schema": "antmaze_latent_completion_v2",
             "environment": antmaze.ENVIRONMENT,
             "environment_versions": dict(
                 zip(("ogbench", "gymnasium", "mujoco"), antmaze.VERSIONS, strict=True)
@@ -122,7 +122,9 @@ def run(
     scale = np.maximum(archive.observations.std(axis=0, dtype=np.float64), 1e-3).astype(
         np.float32
     )
-    model = fit(windows, mean, scale, config)
+    model = fit(
+        windows, mean, scale, config, out / "checkpoints", validate_resume(out, resume)
+    )
     eval_windows = validation.sample_windows(
         np.random.default_rng([config.seed, 801]), 512, **settings
     )
@@ -133,7 +135,7 @@ def run(
                 **model.weights,
                 "mean": mean,
                 "scale": scale,
-                "flow_scale": model.flow_scale,
+                "flow_scale": model.flow_scale.numpy(),
             }
         )
     )
@@ -151,10 +153,7 @@ def run(
         with gzip.open(out / "plans.jsonl.gz", "wt", encoding="utf-8") as stream:
             for start in starts:
                 direct.append(rollout(env, start, actor, evaluation.action_limit))
-                key = jax.random.fold_in(
-                    jax.random.fold_in(jax.random.key(config.seed), start.task),
-                    start.seed,
-                )
+                key = stream_seed(config.seed, start.task, start.seed)
                 controller = RecedingGoals(
                     actor, model, key, evaluation.action_limit, action_size=ACTION_SIZE
                 )
