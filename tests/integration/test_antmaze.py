@@ -164,6 +164,7 @@ def test_antmaze_cli_resumes_and_shares_saved_starts(tmp_path):
             "2",
             "--candidates",
             "2",
+            "--probe-first-candidates",
             "--codec-updates",
             "1",
             "--predictor-updates",
@@ -190,6 +191,22 @@ def test_antmaze_cli_resumes_and_shares_saved_starts(tmp_path):
     assert plans[0]["executed_actions"] == plans[0]["query_offsets"][0] == 2
     assert np.asarray(plans[0]["decoded_routes"]).shape == (2, 2, 29)
     assert np.asarray(plans[0]["latent_routes"]).shape == (2, 2, 16)
+    candidate_episodes = json.loads((latent / "first_candidates.json").read_text())
+    assert candidate_episodes[0] == episodes["latent"]
+    assert [(row["task"], row["seed"]) for row in candidate_episodes[1]] == [
+        (row["task"], row["seed"]) for row in episodes["direct"]
+    ]
+    summary = json.loads((latent / "summary.json").read_text())
+    assert summary["evaluation_environment_steps"] == sum(
+        row["steps"] for arm in [episodes["direct"], *candidate_episodes] for row in arm
+    )
+    assert summary["first_candidate_probe"]["starts"] == 5
+    validation = json.loads((latent / "validation.json").read_text())
+    assert validation["reconstructed_xy_mean_error"] >= 0
+    assert (
+        validation["best_sampled_route_xy_mean_error"]
+        <= validation["sampled_xy_mean_error"]
+    )
 
     environment = antmaze.AntMaze()
     try:
@@ -232,6 +249,35 @@ def test_official_success_on_last_action_overrides_timeout():
         return np.zeros(8)
 
     assert rollout(Episode(), start, policy, 1)["outcome"] == "success"
+
+
+def test_candidate_probe_changes_only_first_attempt():
+    pytest.importorskip("ogbench")
+    jax = pytest.importorskip("jax")
+    np = pytest.importorskip("numpy")
+    from worth_reaching.evaluation.antmaze_latent import RecedingGoals
+    from worth_reaching.models.antmaze_completion import CompletionConfig
+
+    class Completion:
+        config = CompletionConfig(queries=2, candidates=2)
+
+        def propose(self, context, key):
+            latents = np.zeros((1, 2, 2, 16))
+            targets = np.broadcast_to(
+                np.array([1.0, 2.0])[None, :, None, None], (1, 2, 2, 29)
+            )
+            return latents, targets
+
+    def actor(observation, goal):
+        return np.full(8, goal[0])
+
+    observation = np.zeros(29)
+    goal = np.full(29, 3.0)
+    primary = RecedingGoals(actor, Completion(), jax.random.key(7), 6)
+    alternate = RecedingGoals(actor, Completion(), jax.random.key(7), 6, first_route=1)
+    assert [primary(observation, goal)[0] for _ in range(6)] == [1, 1, 1, 1, 3, 3]
+    assert [alternate(observation, goal)[0] for _ in range(6)] == [2, 2, 1, 1, 3, 3]
+    assert [row["selected_route"] for row in alternate.plans] == [1, 0, 0]
 
 
 def test_waypoint_plan_keeps_corners_and_excludes_terminal_goal():

@@ -157,6 +157,7 @@ def _antmaze_latent(args: argparse.Namespace) -> dict[str, object]:
         config,
         evaluation,
         args.starts,
+        probe_first_candidates=args.probe_first_candidates,
     )
 
 
@@ -307,6 +308,11 @@ def main() -> None:
     latent.add_argument("--history", type=int, default=4)
     latent.add_argument("--queries", type=int, default=8)
     latent.add_argument("--candidates", type=int, default=4)
+    latent.add_argument(
+        "--probe-first-candidates",
+        action="store_true",
+        help="Compare each sampled first target under a shared closed-loop continuation",
+    )
     latent.add_argument("--codec-updates", type=int, default=500)
     latent.add_argument("--predictor-updates", type=int, default=1200)
     latent.add_argument("--flow-updates", type=int, default=700)

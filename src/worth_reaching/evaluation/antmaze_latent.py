@@ -42,12 +42,19 @@ class RecedingGoals:
     """Condition the frozen actor on one decoded goal until a time-based replan."""
 
     def __init__(
-        self, actor: Policy, completion: LearnedCompletion, key: jax.Array, limit: int
+        self,
+        actor: Policy,
+        completion: LearnedCompletion,
+        key: jax.Array,
+        limit: int,
+        *,
+        first_route: int = 0,
     ):
         self.actor = actor
         self.completion = completion
         self.key = key
         self.limit = limit
+        self.first_route = first_route
         self.step = self.deadline = 0
         self.target = None
         self.history: deque = deque(maxlen=completion.config.history)
@@ -88,23 +95,50 @@ class RecedingGoals:
         if not np.isfinite(routes).all() or not np.isfinite(decoded).all():
             raise ValueError("AntMaze latent planner produced a non-finite candidate")
         self.deadline = self.step + int(offsets[0, 0])
+        selected = self.first_route if self.step == 0 else 0
         self.plans.append(
             {
                 "step": self.step,
                 "deadline": self.deadline,
                 "query_offsets": offsets[0].tolist(),
-                "selected_route": 0,
+                "selected_route": selected,
                 "selected_query": 0,
                 "latent_routes": routes[0].tolist(),
                 "decoded_routes": decoded[0].tolist(),
             }
         )
-        return decoded[0, 0, 0]
+        return decoded[0, selected, 0]
 
 
 def _fingerprint(path: Path) -> str:
     with path.open("rb") as stream:
         return file_digest(stream, "sha256").hexdigest()
+
+
+def _summarize_probe(candidate_episodes: list[list[dict]], direct: list[dict]) -> dict:
+    succeeded = np.array(
+        [[row["success"] for row in arm] for arm in candidate_episodes], dtype=bool
+    )
+    any_success = succeeded.any(axis=0)
+    return {
+        "starts": len(direct),
+        "starts_with_any_success": int(any_success.sum()),
+        "starts_with_mixed_outcomes": int((any_success & ~succeeded.all(axis=0)).sum()),
+        "starts_where_alternative_succeeds_and_first_fails": int(
+            (succeeded[1:].any(axis=0) & ~succeeded[0]).sum()
+        ),
+        "starts_where_candidate_succeeds_and_direct_fails": int(
+            (any_success & ~np.array([row["success"] for row in direct])).sum()
+        ),
+        "per_first_route": [
+            {
+                "first_route": route,
+                "outcomes": summarize_episodes(episodes),
+                "paired_vs_direct": paired_metrics(direct, episodes),
+            }
+            for route, episodes in enumerate(candidate_episodes)
+        ],
+    }
 
 
 def run(
@@ -115,11 +149,15 @@ def run(
     config: CompletionConfig,
     evaluation: EvalConfig,
     start_bank: Path | None,
+    *,
+    probe_first_candidates: bool = False,
 ) -> dict:
     if dataset not in DATASETS or evaluation.action_limit <= config.queries:
         raise ValueError(
             "Use an AntMaze dataset and an evaluation budget longer than the query count"
         )
+    if probe_first_candidates and config.candidates < 2:
+        raise ValueError("The first-candidate probe needs at least two sampled routes")
     archive = load_antmaze_archive(data_dir / f"{dataset}.npz")
     validation = load_antmaze_archive(data_dir / f"{dataset}-val.npz")
     if archive.fingerprint == validation.fingerprint:
@@ -149,6 +187,7 @@ def run(
             "code_revision": code_revision(),
             "start_source": str(start_bank.resolve()) if start_bank else None,
             "selection": "first sampled route, earliest predicted state",
+            "probe_first_candidates": probe_first_candidates,
         },
     )
     settings = {
@@ -178,9 +217,14 @@ def run(
             }
         )
     )
+    write_json(out / "validation.json", metrics)
 
     env = antmaze.AntMaze()
-    direct, guided = [], []
+    direct = []
+    candidate_episodes: list[list[dict]] = [
+        [] for _ in range(config.candidates if probe_first_candidates else 1)
+    ]
+    guided = candidate_episodes[0]
     try:
         starts = evaluation_starts(env, evaluation, start_bank)
         antmaze.save_starts(out / "starts.npz", starts)
@@ -210,6 +254,13 @@ def run(
                         )
                         + "\n"
                     )
+                for route, episodes in enumerate(candidate_episodes[1:], start=1):
+                    alternative = RecedingGoals(
+                        actor, model, key, evaluation.action_limit, first_route=route
+                    )
+                    episodes.append(
+                        rollout(env, start, alternative, evaluation.action_limit)
+                    )
     finally:
         env.close()
     write_json(out / "episodes.json", {"direct": direct, "latent": guided})
@@ -220,7 +271,11 @@ def run(
         "paired": paired_metrics(direct, guided),
         "plans": sum(row["plans"] for row in guided),
         "training_environment_steps": 0,
-        "evaluation_environment_steps": sum(row["steps"] for row in (*direct, *guided)),
+        "evaluation_environment_steps": sum(row["steps"] for row in direct)
+        + sum(row["steps"] for arm in candidate_episodes for row in arm),
     }
+    if probe_first_candidates:
+        write_json(out / "first_candidates.json", candidate_episodes)
+        summary["first_candidate_probe"] = _summarize_probe(candidate_episodes, direct)
     write_json(out / "summary.json", summary)
     return summary

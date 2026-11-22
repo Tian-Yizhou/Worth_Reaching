@@ -162,7 +162,13 @@ class LearnedCompletion:
         self, context: CompletionContext, key: jax.Array
     ) -> tuple[np.ndarray, np.ndarray]:
         features, forecast = self.forecast(context)
-        routes = route_flow.sample(
+        routes = self._sample(features, forecast, key)
+        return np.asarray(routes), self.decode(routes)
+
+    def _sample(
+        self, features: jax.Array, forecast: jax.Array, key: jax.Array
+    ) -> jax.Array:
+        return route_flow.sample(
             self.flow,
             self.weights["flow"],
             forecast,
@@ -172,13 +178,22 @@ class LearnedCompletion:
             candidates=self.config.candidates,
             steps=12,
         )
-        return np.asarray(routes), self.decode(routes)
 
     def validate(self, batch: MaskedBatch) -> dict[str, float]:
-        _, forecast = self.forecast(batch.context)
+        features, forecast = self.forecast(batch.context)
         target = encode_observations(
             self.codec, self.weights["codec"], (batch.targets - self.mean) / self.scale
         )
+        reconstructed = self.decode(target)
+        replay_xy = batch.targets[..., :2]
+        samples = self._sample(
+            features,
+            forecast,
+            jax.random.fold_in(jax.random.key(self.config.seed), 802),
+        )
+        sampled_errors = np.linalg.norm(
+            self.decode(samples)[..., :2] - replay_xy[:, None], axis=-1
+        ).mean(axis=-1)
         start = batch.context.observations[:, -1, None, :2]
         fraction = batch.context.offsets / batch.context.remaining[:, None]
         interpolated = start + fraction[..., None] * (
@@ -186,16 +201,23 @@ class LearnedCompletion:
         )
         return {
             "normalized_reconstruction_mse": float(
-                np.mean(np.square((self.decode(target) - batch.targets) / self.scale))
+                np.mean(np.square((reconstructed - batch.targets) / self.scale))
+            ),
+            "reconstructed_xy_mean_error": float(
+                np.linalg.norm(reconstructed[..., :2] - replay_xy, axis=-1).mean()
             ),
             "latent_prediction_mse": float(jnp.square(forecast - target).mean()),
             "decoded_xy_mean_error": float(
                 np.linalg.norm(
-                    self.decode(forecast)[..., :2] - batch.targets[..., :2], axis=-1
+                    self.decode(forecast)[..., :2] - replay_xy, axis=-1
                 ).mean()
             ),
+            "sampled_xy_mean_error": float(sampled_errors.mean()),
+            "best_sampled_route_xy_mean_error": float(
+                sampled_errors.min(axis=1).mean()
+            ),
             "linear_xy_mean_error": float(
-                np.linalg.norm(interpolated - batch.targets[..., :2], axis=-1).mean()
+                np.linalg.norm(interpolated - replay_xy, axis=-1).mean()
             ),
         }
 
