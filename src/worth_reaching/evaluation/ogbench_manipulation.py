@@ -189,8 +189,8 @@ def run(
     windows = train.sample_windows(
         np.random.default_rng([config.seed, 800]), config.windows, **settings
     )
-    model = fit(windows, mean, scale, config, out / "checkpoints", previous)
     heldout = validation.sample_windows(np.random.default_rng(801), 512, **settings)
+    model = fit(windows, heldout, mean, scale, config, out / "checkpoints", previous)
     metrics = model.validate(heldout, compare_xy=False)
     for label, cap in (("short", executor.short_goal_steps), ("all", None)):
         batch = validation.sample(np.random.default_rng(803), 1024, max_goal_steps=cap)

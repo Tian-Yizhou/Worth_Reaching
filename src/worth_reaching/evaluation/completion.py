@@ -208,6 +208,7 @@ def run_completion_training(
     write_json(out / "splits.json", worlds)
     codec, conditioned, goal_blind = fit(
         datasets["train"],
+        datasets["dev"],
         spec,
         config,
         out / "checkpoints",

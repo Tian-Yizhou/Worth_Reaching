@@ -122,11 +122,17 @@ def run(
     scale = np.maximum(archive.observations.std(axis=0, dtype=np.float64), 1e-3).astype(
         np.float32
     )
-    model = fit(
-        windows, mean, scale, config, out / "checkpoints", validate_resume(out, resume)
-    )
     eval_windows = validation.sample_windows(
         np.random.default_rng([config.seed, 801]), 512, **settings
+    )
+    model = fit(
+        windows,
+        eval_windows,
+        mean,
+        scale,
+        config,
+        out / "checkpoints",
+        validate_resume(out, resume),
     )
     metrics = model.validate(eval_windows)
     (out / "weights.msgpack").write_bytes(
