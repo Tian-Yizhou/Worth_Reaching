@@ -28,6 +28,8 @@ Milestone 5 starts with state AntMaze-Large. `wr antmaze-gcbc` reads the officia
 
 `wr scene-latent` pairs direct goal tracking and decoded intermediate targets with one learned executor across the five state-based OGBench Scene tasks. This establishes the state-observation comparison for a later visual experiment. [Scene protocol](docs/experiments.md#run-state-based-ogbench-scene)
 
+`wr puzzle-latent` applies the shared OGBench manipulation runner to the four state-based Puzzle boards. The official goal configurations give a starting point for studying how performance varies with the number of presses required. [Puzzle protocol](docs/experiments.md#run-state-based-ogbench-puzzle)
+
 ## Evaluation protocol
 
 Keep exploratory development worlds separate from test worlds. Freeze decision rules before the final comparison. Compare methods on matched starts and independent repeat streams. When isolating proposal quality, share the executor, terminal objective and candidate budget. Record all environment interactions used for training, proposal updates and evaluation. [Architecture](docs/architecture.md) · [Running experiments](docs/experiments.md)

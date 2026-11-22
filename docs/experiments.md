@@ -15,6 +15,7 @@ Use Python 3.12 or newer and run from the repository root. The [quick start](../
 | `results/pointmaze-diffuser.*/` | PointMaze archive splits, decoded plans, executed trajectories and paired outcomes |
 | `results/diffuser-kuka.pilot.*/` | Conditional stacking clip splits, decoded plans, executed states and tower scores |
 | `results/ogbench-scene.*/` | Frozen Scene executor and completion weights, matched starts, decoded plans and rollout outcomes |
+| `results/ogbench-puzzle.*/` | Puzzle artifacts indexed by board, including public rollouts and paired successes |
 | `results/benchmark-suite.*/` | Per-task development runs and logs from the overnight launcher |
 | `results/checkpoints/` | Policy and model weights |
 | `results/external/` | Isolated benchmark source trees and environments |
@@ -250,3 +251,23 @@ uv run --no-sync wr scene-latent --out "$run_dir/state" --eval-repeats 1
 Executor training alternates hindsight-goal batches capped at 64 transitions and batches that sample any later observation in the same training episode. Both arms use that actor after training. The direct arm tracks the terminal observation. The latent arm takes the earliest state of the first sampled decoded route and replans when its time offset elapses. The official input features and action history feed the planner. Extra archive fields for MuJoCo state and buttons are outside the training loader.
 
 The manifest identifies the official train and validation archives by checksum. Offline validation reports action MSE and normalized reconstruction and prediction MSE. The other artifacts contain exact starts, public trajectories with executed actions, sampled plans, weights and paired success by task.
+
+## Run state-based OGBench Puzzle
+
+The robot presses buttons to match the full goal pattern. The evaluator uses OGBench's five official goal configurations and scores the native success event. The board selects the official dataset, observation width and action budget. [OGBench Puzzle](https://seohong.me/projects/ogbench/#puzzle) · [Official task and dataset specifications](https://arxiv.org/html/2410.20092#A5.SS1)
+
+| `--board` | Training archive | State features | Action limit |
+| --- | --- | ---: | ---: |
+| `3x3` | `puzzle-3x3-play-v0` | 55 | 500 |
+| `4x4` (default) | `puzzle-4x4-play-v0` | 83 | 500 |
+| `4x5` | `puzzle-4x5-play-v0` | 99 | 1,000 |
+| `4x6` | `puzzle-4x6-play-v0` | 115 | 1,000 |
+
+```bash
+board=4x4
+uv run --no-sync python -c 'import ogbench, sys; ogbench.download_datasets([f"puzzle-{sys.argv[1]}-play-v0"], dataset_dir="results/datasets/ogbench")' "$board"
+run_dir="$(mktemp -d results/ogbench-puzzle.XXXXXX)"
+uv run --no-sync wr puzzle-latent --board "$board" --out "$run_dir/$board" --eval-repeats 1
+```
+
+The runner uses the same executor recipe and artifact layout as Scene. Both arms share the exact start, public goal, frozen executor and action budget. The latent arm generates candidate intermediate observations and replans from feedback. The archive's extra physics and button-state arrays stay outside training. Use `--task` to select one official goal, `--eval-steps` to shorten a smoke test and `--eval-split test` after fixing the recipe.

@@ -1,4 +1,4 @@
-"""Train a shared Scene executor and test decoded plans on official tasks."""
+"""Train a shared OGBench manipulation executor and test decoded plans."""
 
 import gzip
 import json
@@ -12,7 +12,13 @@ from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.data.ogbench import StateArchive, load_state_archive
-from worth_reaching.envs import scene
+from worth_reaching.envs.ogbench_manipulation import STATE_SPEC, Manipulation
+from worth_reaching.envs.ogbench_tasks import (
+    ACTION_SIZE,
+    SEED_OFFSETS,
+    TASKS,
+    ManipulationTask,
+)
 from worth_reaching.evaluation.maze_planning import Policy, RecedingGoals
 from worth_reaching.models import gcbc
 from worth_reaching.models.maze_completion import CompletionConfig, fit
@@ -34,7 +40,7 @@ class ExecutorConfig:
 
     def __post_init__(self) -> None:
         if self.updates < 1:
-            raise ValueError("Use at least one Scene executor update")
+            raise ValueError("Use at least one executor update")
 
 
 def _fit_executor(
@@ -48,8 +54,8 @@ def _fit_executor(
         config.width,
         seed,
         config.learning_rate,
-        observation_size=scene.OBSERVATION_SIZE,
-        action_size=scene.ACTION_SIZE,
+        observation_size=len(mean),
+        action_size=ACTION_SIZE,
         relative_coordinates=0,
     )
     state = replicate(state)
@@ -71,7 +77,7 @@ def _fit_executor(
 
 
 def rollout(
-    env: scene.Scene, initial: np.ndarray, goal: np.ndarray, policy: Policy, limit: int
+    env: Manipulation, initial: np.ndarray, goal: np.ndarray, policy: Policy, limit: int
 ) -> tuple[dict, np.ndarray, np.ndarray]:
     observation = initial
     states, actions = [observation], []
@@ -103,6 +109,7 @@ def _summarize(episodes: list[dict], tasks: tuple[int, ...]) -> dict:
 
 
 def run(
+    benchmark: ManipulationTask,
     data_dir: Path,
     out: Path,
     config: CompletionConfig,
@@ -111,35 +118,42 @@ def run(
     split: str,
     task: int | None,
     repeats: int,
-    limit: int,
+    limit: int | None,
 ) -> dict:
-    if not config.queries < limit <= scene.ACTION_LIMIT or not 0 < repeats <= (
-        scene.SEED_BASE["test"] - scene.SEED_BASE["dev"]
+    if limit is None:
+        limit = benchmark.action_limit
+    if (
+        not config.queries < limit <= benchmark.action_limit
+        or not 0 < repeats <= SEED_OFFSETS["test"]
     ):
-        raise ValueError("Choose a valid Scene action budget and disjoint reset seeds")
+        raise ValueError(
+            f"Choose an action budget in {config.queries + 1}..{benchmark.action_limit} "
+            f"for {benchmark.environment} and disjoint reset seeds"
+        )
     train, validation = [
         load_state_archive(
-            data_dir / f"{scene.DATASET}{suffix}.npz",
-            observation_size=scene.OBSERVATION_SIZE,
-            action_size=scene.ACTION_SIZE,
+            data_dir / f"{benchmark.dataset}{suffix}.npz",
+            observation_size=benchmark.observation_size,
+            action_size=ACTION_SIZE,
         )
         for suffix in ("", "-val")
     ]
     if train.fingerprint == validation.fingerprint:
-        raise ValueError("Training and validation must use distinct Scene archives")
-    tasks = scene.TASKS if task is None else (task,)
-    seeds = range(scene.SEED_BASE[split], scene.SEED_BASE[split] + repeats)
+        raise ValueError("Training and validation must use distinct OGBench archives")
+    tasks = TASKS if task is None else (task,)
+    start_seed = benchmark.seed_base + SEED_OFFSETS[split]
+    seeds = range(start_seed, start_seed + repeats)
     out.mkdir(parents=True, exist_ok=False)
     write_json(
         out / "manifest.json",
         {
-            "schema": "ogbench_scene_latent_v1",
-            "environment": scene.ENVIRONMENT,
+            "schema": f"ogbench_{benchmark.family}_latent_v1",
+            "environment": benchmark.environment,
             "observation": "official_state",
             "versions": {
                 name: version(name) for name in ("ogbench", "gymnasium", "mujoco")
             },
-            "dataset": scene.DATASET,
+            "dataset": benchmark.dataset,
             "train_sha256": train.fingerprint,
             "validation_sha256": validation.fingerprint,
             "training": asdict(config),
@@ -188,7 +202,7 @@ def run(
 
     episodes = {"direct": [], "latent": []}
     starts, trajectories = [], {}
-    env = scene.Scene()
+    env = Manipulation(benchmark)
     try:
         with gzip.open(out / "plans.jsonl.gz", "wt", encoding="utf-8") as stream:
             for task_id in tasks:
@@ -201,7 +215,7 @@ def run(
                         model,
                         jax.random.fold_in(key, seed),
                         limit,
-                        action_size=scene.ACTION_SIZE,
+                        action_size=ACTION_SIZE,
                     )
                     for arm, policy in (("direct", actor), ("latent", planner)):
                         initial = (
@@ -229,7 +243,7 @@ def run(
         observation=np.stack([s.observation for s in starts]),
         goal=np.stack([s.goal for s in starts]),
         physics=np.stack([s.physics for s in starts]),
-        state_spec=scene.STATE_SPEC,
+        state_spec=STATE_SPEC,
     )
     np.savez_compressed(out / "trajectories.npz", **trajectories)
     write_json(out / "episodes.json", episodes)
