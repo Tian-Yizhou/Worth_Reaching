@@ -1,4 +1,4 @@
-"""Craftax-Classic symbolic observations and the iron-pickaxe terminal task."""
+"""Craftax-Classic symbolic observations and iron-pickaxe terminal tasks."""
 
 from dataclasses import dataclass
 from typing import Literal
@@ -13,9 +13,12 @@ from craftax.craftax_classic.envs.craftax_symbolic_env import (
 from numpy.typing import NDArray
 
 TASK = "make_iron_pickaxe"
+SURVIVAL_TASK = "make_iron_pickaxe_and_survive"
 RULES_VERSION = 1
+TASK_RULES = {TASK: RULES_VERSION, SURVIVAL_TASK: 2}
 OBSERVATION_SCHEMA = "craftax-classic-symbolic-v1"
 ACTION_NAMES = {action.value: action.name.lower() for action in Action}
+IRON_PICKAXE = Achievement.MAKE_IRON_PICKAXE.value
 Outcome = Literal["success", "death", "timeout"]
 
 
@@ -24,15 +27,20 @@ class CraftaxStep:
     observation: NDArray[np.float32]
     remaining_actions: int
     outcome: Outcome | None
+    crafted_iron_pickaxe: bool = False
 
 
 class CraftaxClassic:
     """Own the native environments and compiled functions for one action budget."""
 
-    def __init__(self, budget: int):
+    def __init__(self, budget: int, task: str = TASK):
         if not 0 < budget < 2**31 - 1:
             raise ValueError("Craftax budget must be between 1 and 2147483646")
+        if task not in TASK_RULES:
+            raise ValueError(f"Unknown Craftax task: {task}")
         self.budget = budget
+        self.task = task
+        self.rules_version = TASK_RULES[task]
         native = CraftaxClassicSymbolicEnvNoAutoReset()
         params = native.default_params.replace(max_timesteps=budget)
         self.environment_id = native.name
@@ -44,9 +52,9 @@ class CraftaxClassic:
             observation, next_state, _, _, _ = native.step_env(
                 key, state, action, params
             )
-            achieved = next_state.achievements[Achievement.MAKE_IRON_PICKAXE.value]
             achievement = (
-                achieved & ~state.achievements[Achievement.MAKE_IRON_PICKAXE.value]
+                next_state.achievements[IRON_PICKAXE]
+                & ~state.achievements[IRON_PICKAXE]
             )
             tile = next_state.map[tuple(next_state.player_position)]
             death = (next_state.player_health <= 0) | (tile == BlockType.LAVA.value)
@@ -84,17 +92,21 @@ class CraftaxEpisode:
             raise RuntimeError("Cannot step a finished episode")
         if action not in ACTION_NAMES:
             raise ValueError(f"Invalid Craftax action: {action}")
-        observation, self._state, success, death = self._env._advance(
+        observation, self._state, crafted, death = self._env._advance(
             key, self._state, action
         )
+        crafted = bool(crafted)
         self.observation = np.asarray(observation)
         self._remaining -= 1
         outcome: Outcome | None = None
-        if success:
+        if self._env.task == TASK and crafted:
             outcome = "success"
         elif death:
             outcome = "death"
         elif self._remaining == 0:
-            outcome = "timeout"
+            achieved = self._state.achievements[IRON_PICKAXE]
+            outcome = (
+                "success" if self._env.task == SURVIVAL_TASK and achieved else "timeout"
+            )
         self._finished = outcome is not None
-        return CraftaxStep(self.observation, self._remaining, outcome)
+        return CraftaxStep(self.observation, self._remaining, outcome, crafted)

@@ -8,13 +8,23 @@ Use an environment-independent planner and a simulator-backed evaluator. At deci
 | --- | --- | --- |
 | Environment adapter | Reset or step produces public observation, action specification, terminal flags and scoreable events | Map native actions and observations, apply task termination, pin rules and wrapper versions. Provide optional privileged branching to the evaluator through a separate interface. |
 | Trajectory recorder and split manifest | Episodes and policy versions produce trajectories, snapshot references and world-group splits | Preserve action order, termination reason and data provenance. All descendants of one root episode belong to its split. |
-| History encoder and dynamics | Public observation/action prefix produces a latent state. A latent state and candidate action produce a distribution of subsequent features and termination. | Handle memory, stochastic evolution and optional event-scale predictions. Encode order explicitly when the rules use it. |
-| Goal representation and executor | Target region, history and deadline produce primitive actions and a stop reason | Fit fixed neighborhoods or outcome-informed regions from training data. Freeze the membership rule for each comparison, then learn or plan short action sequences toward the region. |
-| Candidate proposer | Public history or latent state, terminal objective and budget produce region candidates and deadlines | Propose candidates from replay, a demonstration-trained generator, an RL-tuned generator, or coarse world-model predictions. Use the same candidate interface and retain proposal provenance. |
+| History encoder and world model | Public observation and action history produces a latent state. The starting history, terminal condition and time information determine predictions for the missing middle. | Learn task-relevant middle representations from complete training traces with variable-length masks. Action-conditioned forward predictions can also support execution checks. |
+| Candidate proposer | Public history, terminal objective and budget produce candidate latent routes and next targets | Sample different middles for the same start and goal using a conditional generator. Use the same candidate interface for replay comparisons and retain proposal provenance. |
+| Goal representation and executor | Target representation, public history and budget produce primitive actions and a stop reason | Allow different concrete histories and actions to realize one abstract target. Declare the arrival rule and deadline before each prospective attempt. |
 | High-level planner | Current latent state, terminal goal and budget produce a target, duration or direct plan | Generate alternatives, score their likely consequences, execute the first segment and replan from observed outcomes. |
 | Branch evaluator and experiment runner | Frozen starts, interventions, policies and random streams produce attempts and aggregate results | Collect interventional labels, enforce permissions, meter interactions and compute, and estimate paired outcomes. |
 
-The `src/worth_reaching/` package groups code by responsibility. `envs/` adapts simulators, `data/` handles trajectory collection and experiment records, `policies/` selects actions from public observations, and `evaluation/` runs replay and interventions. `cli.py` connects configurations to these modules. Shared public types describe trajectories, actions and goals. Learned dynamics and planning can have their own packages as they are introduced. Only evaluation and training-data paths can obtain simulator snapshots. A bounded simulator planner is a separately labeled baseline.
+The `src/worth_reaching/` package groups code by responsibility.
+
+| Package | Current responsibility |
+| --- | --- |
+| `envs/` | Versioned simulator adaptations and terminal task rules |
+| `data/` | Collect complete public trajectories, validate their manifests and stream episodes by world split |
+| `policies/` | Recurrent expert inference from public observations |
+| `evaluation/` | Replay, matched continuations and comparisons of shared candidate banks |
+| `cli.py` | Connect configurations to `pilot`, `collect` and `attempt-compare` |
+
+The trajectory completion model will use public data from `data/`. Its executor will consume public observations and emit primitive actions. Evaluation owns simulator snapshots and restores them for matched repeats. [Trajectory completion design](trajectory-completion.md)
 
 ## Execution and data contracts
 
@@ -30,12 +40,16 @@ Test termination at the action limit and success on the last allowed action. Che
 
 ## Craftax collection contract
 
-Craftax-Classic passes symbolic observations and action IDs to the collection path. The adapter owns the native state. The evaluator can fork a live snapshot and supply a transition key for each step. World generation, transition randomness and policy sampling use separate streams. The terminal label is assigned from the step that first achieves the iron pickaxe, leaves the agent dead or in lava, or exhausts the budget, in that order.
+Craftax-Classic passes symbolic observations and action IDs to the collection path. The adapter owns the native state. The evaluator can fork a live snapshot and supply a transition key for each step. World generation, transition randomness and policy sampling use separate streams. In `make_iron_pickaxe`, the first craft takes precedence over death or exhaustion of the budget. In `make_iron_pickaxe_and_survive`, death ends the episode. A living agent at the deadline succeeds if it has crafted the pickaxe. Both tasks share world identifiers and splits for a matched seed. The compound archive records its own task, rules version and first-craft step. Policies receive the same symbolic observations.
 
 Each compressed trajectory record contains the episode ID, initial observation, public transitions and outcome. The split manifest maps the episode ID to its root world and split before collection. The run manifest identifies the observation schema, rules and action vocabulary. The final summary is written after the trajectory file closes.
 
 Random and PPO-RNN collection share the same environment and transition seed streams for each world. Their policy sampling streams are separate from the simulator. PPO-RNN receives only the current public symbolic observation and its per-episode recurrent memory. The manifest records the checkpoint step and actor digest, and the split label is assigned by world regardless of policy.
 
-The action branch diagnostic reconstructs each simulator start using the recorded reset and transition keys. It verifies the public prefix and rebuilds PPO-RNN memory from public observations, including the observation at the forced decision. Each matched repeat shares new transition and policy keys across candidate arms. The output records public-history references and outcomes, while snapshots stay in the evaluator's memory.
+`data/craftax_trajectories.py` loads completed random and expert collections through the same interface. It validates task rules and verifies episode IDs and split assignments against the original world seeds. Its split iterator yields complete public episode records without loading a policy checkpoint or constructing a simulator.
 
-The waypoint scoring pilot uses the same replay and archive validation. Each candidate defines an observation region and a finite action script. The evaluator records arrival separately from terminal success after continuation. The empirical selectors share the calibration attempts and their choices are scored on a disjoint repeat pool.
+`evaluation/craftax.py` reconstructs a live start from recorded actions and verifies each replayed observation. It returns the recurrent memory immediately before the current observation. A continuation can act directly or run a declared action prefix first. Forced actions still advance policy memory from each public observation. Match repeat keys across alternatives to compare outcomes on the same transition and policy random streams.
+
+## Shared-attempt evaluation contract
+
+The shared-attempt comparison fits its scoring heads on training starts and selects the reachability threshold on development starts. Each external simulator can export a `shared_attempts_v1` bank with disjoint root `world_id`s, fixed public features, a `direct` arm, and ordered matched trials for each candidate. An optional `native_choice` identifies the native selector's choice from the same bank. `public_bank` projects each record to the selection input. Selection uses only these projected fields. The evaluator uses the held-out arrival and terminal labels to score the frozen choices.

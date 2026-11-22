@@ -10,6 +10,8 @@ CONFIG = Path(__file__).resolve().parents[2] / "configs/craftax/iron_pickaxe.tom
 
 def test_collect_cli_records_a_frozen_split(tmp_path):
     pytest.importorskip("craftax")
+    from worth_reaching.data.craftax_trajectories import load_craftax_archive
+
     out = tmp_path / "craftax"
     subprocess.run(
         [
@@ -43,6 +45,17 @@ def test_collect_cli_records_a_frozen_split(tmp_path):
         assert row["outcome"] == "timeout"
         assert [step["remaining_actions"] for step in row["steps"]] == [1, 0]
         assert len(row["initial_observation"]) == len(row["steps"][0]["observation"])
+    archive = load_craftax_archive(out)
+    for split in ("train", "dev", "test"):
+        assert [trace["episode_id"] for _, trace in archive.iter_episodes(split)] == [
+            row["episode_id"] for row in splits["episodes"] if row["split"] == split
+        ]
+    splits["episodes"][0]["split"] = (
+        "test" if splits["episodes"][0]["split"] == "train" else "train"
+    )
+    (out / "splits.json").write_text(json.dumps(splits))
+    with pytest.raises(ValueError, match="world split manifest"):
+        load_craftax_archive(out)
 
 
 def test_craftax_branch_replay_and_terminal_labels():
@@ -100,15 +113,11 @@ def test_craftax_branch_replay_and_terminal_labels():
 def test_replay_natural_iron_pickaxe_trajectory():
     pytest.importorskip("craftax")
     import jax
+    from craftax.craftax_classic.constants import Action
 
-    from worth_reaching.data.collection import episode_spec
+    from worth_reaching.data.craftax_trajectories import episode_spec
     from worth_reaching.envs.craftax import CraftaxClassic
-    from worth_reaching.evaluation.craftax_branches import (
-        ACTION_IDS,
-        Decision,
-        replay_decision,
-        run_attempt,
-    )
+    from worth_reaching.evaluation.craftax import replay_prefix, run_attempt
 
     fixture = CONFIG.parents[2] / "tests/fixtures/craftax_iron_pickaxe.json"
     trace = json.loads(fixture.read_text(encoding="utf-8"))
@@ -128,15 +137,8 @@ def test_replay_natural_iron_pickaxe_trajectory():
     assert len(outcomes) == 141
     assert outcomes[-1] == "success"
 
-    iron, noop = ACTION_IDS["make_iron_pickaxe"], ACTION_IDS["noop"]
-    decision = Decision(
-        episode_spec(trace["world_seed"], trace["source_policy"]),
-        prefix_steps=140,
-        remaining_actions=860,
-        horizon=2,
-        recorded_action=iron,
-        alternative_action=noop,
-    )
+    iron, noop = Action.MAKE_IRON_PICKAXE.value, Action.NOOP.value
+    source = episode_spec(trace["world_seed"], trace["source_policy"])
 
     class CraftWhenCalled:
         def initial_memory(self):
@@ -147,21 +149,77 @@ def test_replay_natural_iron_pickaxe_trajectory():
             return carry + 1
 
         def sample(self, observation, carry, key):
-            assert int(carry) == 141
+            assert int(carry) in (140, 141)
             return self.observe(observation, carry), iron
 
     policy = CraftWhenCalled()
-    replayed, memory = replay_decision(env, decision, recorded, policy)
-    assert int(memory) == 141
+    replayed, memory = replay_prefix(env, source, 140, recorded, policy)
+    assert int(memory) == 140
     snapshot = replayed.snapshot()
     repeat_key = jax.random.key(1234)
-    for action, expected_steps in ((iron, 1), (noop, 2)):
+    for actions, expected_steps in (
+        ((), 1),
+        ((iron,), 1),
+        ((noop,), 2),
+        ((noop, iron), 2),
+    ):
         result = run_attempt(
-            env.restore(snapshot), memory, policy, action, 2, repeat_key
+            env.restore(snapshot),
+            memory,
+            policy,
+            horizon=2,
+            repeat_key=repeat_key,
+            forced_actions=actions,
         )
         assert result.outcome == "success"
         assert result.steps == expected_steps
-    limited = run_attempt(env.restore(snapshot), memory, policy, noop, 1, repeat_key)
+    limited = run_attempt(
+        env.restore(snapshot),
+        memory,
+        policy,
+        horizon=1,
+        repeat_key=repeat_key,
+        forced_actions=(noop,),
+    )
     assert limited.outcome == "horizon_limit"
     assert limited.remaining_actions == 859
     assert replayed.snapshot() is snapshot
+
+
+def test_craft_and_survive_is_scored_at_deadline_and_death_overrides_crafting():
+    pytest.importorskip("craftax")
+    import jax
+    from craftax.craftax_classic.constants import Action, BlockType
+
+    from worth_reaching.envs.craftax import SURVIVAL_TASK, CraftaxClassic
+
+    env = CraftaxClassic(budget=2, task=SURVIVAL_TASK)
+    start = env.reset(jax.random.key(0)).snapshot()
+    row, col = map(int, start.player_position)
+    ready = start.replace(
+        map=start.map.at[row - 1, col]
+        .set(BlockType.CRAFTING_TABLE.value)
+        .at[row + 1, col]
+        .set(BlockType.FURNACE.value)
+        .at[row, col + 1]
+        .set(BlockType.LAVA.value),
+        inventory=start.inventory.replace(iron=1, wood=1, coal=1, stone=1),
+    )
+    key = jax.random.key(1)
+    episode = env.restore(ready)
+    craft = episode.step(Action.MAKE_IRON_PICKAXE.value, key=key)
+    assert craft.crafted_iron_pickaxe and craft.outcome is None
+    assert craft.remaining_actions == 1
+
+    post_craft = episode.snapshot()
+    death = env.restore(post_craft).step(Action.RIGHT.value, key=key)
+    assert death.outcome == "death" and death.remaining_actions == 0
+    alive = episode.step(Action.NOOP.value, key=key)
+    assert alive.outcome == "success" and not alive.crafted_iron_pickaxe
+
+    last_action = env.restore(ready.replace(timestep=ready.timestep + 1))
+    assert (
+        last_action.step(Action.MAKE_IRON_PICKAXE.value, key=key).outcome == "success"
+    )
+    uncrafted = env.restore(ready.replace(timestep=ready.timestep + 1))
+    assert uncrafted.step(Action.NOOP.value, key=key).outcome == "timeout"

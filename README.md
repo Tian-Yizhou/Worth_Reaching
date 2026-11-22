@@ -1,12 +1,12 @@
 # Worth Reaching
 
-Worth Reaching is a reinforcement learning research project about discovering intermediate goals for long-horizon tasks. Its first benchmark asks an agent to craft an iron pickaxe in Craftax-Classic within a fixed action budget. Different routes can leave the agent with similar opportunities to finish, even when their positions or inventories differ. We study whether a learned latent region can represent those opportunities and guide the agent's next decision.
+Worth Reaching studies how agents discover intermediate goals for long-horizon tasks. The proposed approach learns to fill in missing portions of demonstration trajectories in latent space. Given a starting history and a terminal goal, it samples multiple routes and revises its plan as it acts. The first benchmark asks an agent to craft an iron pickaxe within a fixed action budget in Craftax-Classic and stay alive through the deadline. [Research design](docs/trajectory-completion.md)
 
 ## Research contribution
 
 The project asks whether agents can discover reliably executable goals that are rare in demonstrations, and whether sequencing those goals improves terminal success. The evaluation measures both the probability of reaching an intermediate goal and the probability of finishing the task after attempting it. Matched simulator starts allow several choices to be tested with the same information and budget.
 
-The planned comparison tests learned regions against fixed latent neighborhoods, direct planning and human-defined milestones. The current implementation includes a deterministic MiniGrid pilot, random and PPO-RNN trajectory collection in Craftax-Classic, and paired action branches that measure how a decision changes the chance of crafting the iron pickaxe. [Implementation plan](PLAN.md) · [Architecture](docs/architecture.md)
+The planned comparison evaluates generated routes against direct execution and replay proposals on held-out worlds under matched budgets. The repository provides MiniGrid and Craftax environments, trajectory collection, and matched simulator branches for prospective evaluation. [Implementation plan](PLAN.md) · [Architecture](docs/architecture.md)
 
 ## Quick start
 
@@ -31,7 +31,8 @@ uv sync --locked --group dev --extra minigrid --extra craftax
 mkdir -p results
 run_dir="$(mktemp -d results/craftax-smoke.XXXXXX)/craftax"
 JAX_PLATFORMS=cpu uv run --no-sync wr collect \
-  --config configs/craftax/iron_pickaxe.toml --out "$run_dir"
+  --config configs/craftax/iron_pickaxe.toml \
+  --task make_iron_pickaxe_and_survive --out "$run_dir"
 cat "$run_dir/summary.json"
 ```
 
@@ -39,7 +40,7 @@ The default recipe records four random-policy episodes of at most 32 actions eac
 
 ### Longer server runs
 
-The experiment guide covers matched expert and random collection, paired action evaluation, and a shared-bank scoring pilot for replay-derived waypoints. [Running experiments](docs/experiments.md) · [Waypoint scoring pilot](docs/experiments.md#shared-bank-waypoint-scoring-pilot)
+The experiment guide covers matched expert and random collection, artifact locations, and selection on shared banks of prospective attempts. [Running experiments](docs/experiments.md)
 
 ## Contributing
 

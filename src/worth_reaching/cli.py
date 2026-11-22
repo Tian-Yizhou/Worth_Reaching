@@ -13,6 +13,7 @@ def _run_pilot(args: argparse.Namespace) -> dict[str, object]:
 
 def _collect(args: argparse.Namespace) -> dict[str, object]:
     from worth_reaching.data.collection import CollectionConfig, collect
+    from worth_reaching.envs.craftax import TASK
 
     config = CollectionConfig.load(
         args.config,
@@ -20,59 +21,18 @@ def _collect(args: argparse.Namespace) -> dict[str, object]:
         budget=args.budget,
         seed_start=args.seed_start,
     )
-    return collect(config, args.out, expert_checkpoint=args.expert_checkpoint)
-
-
-def _branch(args: argparse.Namespace) -> dict[str, object]:
-    from worth_reaching.evaluation.craftax_branches import BranchConfig, label_branches
-
-    config = BranchConfig(
-        split=args.split,
-        decisions=args.decisions,
-        repeats=args.repeats,
-        lead=args.lead,
-        horizon=args.horizon,
-        seed=args.seed,
-    )
-    return label_branches(args.dataset, args.out, args.checkpoint, config)
-
-
-def _rank(args: argparse.Namespace) -> dict[str, object]:
-    from worth_reaching.models.action_ranking import run_ranking
-
-    return run_ranking(
-        args.dataset,
-        args.train_branches,
-        args.eval_branches,
+    return collect(
+        config,
         args.out,
-        deadline=args.deadline,
-        iterations=args.iterations,
-        seed=args.seed,
+        expert_checkpoint=args.expert_checkpoint,
+        task=args.task or TASK,
     )
 
 
-def _waypoint_pilot(args: argparse.Namespace) -> dict[str, object]:
-    from worth_reaching.evaluation.craftax_waypoints import (
-        RADIUS,
-        WaypointConfig,
-        run_waypoint_pilot,
-    )
+def _attempt_compare(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.attempt_selection import compare_attempt_banks
 
-    config = WaypointConfig(
-        worlds=args.worlds,
-        repeats=args.repeats,
-        slip_probability=args.slip_probability,
-        seed=args.seed,
-        split=args.split,
-        horizon=args.horizon,
-        skip_worlds=args.skip_worlds,
-        offer_expert=args.offer_expert,
-        prefix_steps=args.prefix_steps,
-        source_outcome=args.source_outcome
-        or ("success" if args.prefix_steps is None else "any"),
-        region_radius=RADIUS if args.region_radius is None else args.region_radius,
-    )
-    return run_waypoint_pilot(args.dataset, args.checkpoint, args.out, config)
+    return compare_attempt_banks(args.train, args.dev, args.test, args.out, args.seed)
 
 
 def main() -> None:
@@ -90,64 +50,19 @@ def main() -> None:
     collection.add_argument("--episodes", type=int)
     collection.add_argument("--budget", type=int)
     collection.add_argument("--seed-start", type=int)
+    collection.add_argument(
+        "--task", help="Craftax terminal task (default: make_iron_pickaxe)"
+    )
     collection.add_argument("--expert-checkpoint", type=Path)
     collection.set_defaults(run=_collect, extra="craftax")
-    branching = commands.add_parser(
-        "branch", help="Evaluate paired Craftax action branches"
+    comparison = commands.add_parser(
+        "attempt-compare", help="Fit and compare shared-bank selectors"
     )
-    branching.add_argument("--dataset", type=Path, required=True)
-    branching.add_argument("--out", type=Path, required=True)
-    branching.add_argument("--checkpoint", type=Path, required=True)
-    branching.add_argument("--split", choices=("train", "dev", "test"), default="train")
-    branching.add_argument("--decisions", type=int, default=2)
-    branching.add_argument("--repeats", type=int, default=2)
-    branching.add_argument("--lead", type=int, default=8)
-    branching.add_argument("--horizon", type=int, default=16)
-    branching.add_argument("--seed", type=int, default=0)
-    branching.set_defaults(run=_branch, extra="craftax")
-    ranking = commands.add_parser(
-        "rank", help="Fit and evaluate paired action-ranking baselines"
-    )
-    ranking.add_argument("--dataset", type=Path, required=True)
-    ranking.add_argument("--train-branches", type=Path, required=True)
-    ranking.add_argument("--eval-branches", type=Path, required=True)
-    ranking.add_argument("--out", type=Path, required=True)
-    ranking.add_argument("--deadline", type=int, default=8)
-    ranking.add_argument("--iterations", type=int, default=100)
-    ranking.add_argument("--seed", type=int, default=0)
-    ranking.set_defaults(run=_rank, extra="craftax")
-    waypoints = commands.add_parser(
-        "waypoint-pilot", help="Compare shared-bank waypoint scores"
-    )
-    waypoints.add_argument("--dataset", type=Path, required=True)
-    waypoints.add_argument("--checkpoint", type=Path, required=True)
-    waypoints.add_argument("--out", type=Path, required=True)
-    waypoints.add_argument("--split", choices=("train", "dev"), default="dev")
-    waypoints.add_argument("--worlds", type=int, default=6)
-    waypoints.add_argument("--repeats", type=int, default=4)
-    waypoints.add_argument("--slip-probability", type=float, default=0.0)
-    waypoints.add_argument("--seed", type=int, default=0)
-    waypoints.add_argument("--horizon", type=int, default=24)
-    waypoints.add_argument("--skip-worlds", type=int, default=0)
-    waypoints.add_argument(
-        "--offer-expert",
-        action="store_true",
-        help="Calibrate expert as a shared option",
-    )
-    waypoints.add_argument(
-        "--prefix-steps", type=int, help="Use a fixed number of recorded prefix actions"
-    )
-    waypoints.add_argument(
-        "--source-outcome",
-        choices=("any", "success", "death", "timeout"),
-        help="Source cohort (default: success for relative starts, any for fixed starts)",
-    )
-    waypoints.add_argument(
-        "--region-radius",
-        type=float,
-        help="Mean absolute observation radius (default: 0.002)",
-    )
-    waypoints.set_defaults(run=_waypoint_pilot, extra="craftax")
+    for split in ("train", "dev", "test"):
+        comparison.add_argument(f"--{split}", type=Path, required=True)
+    comparison.add_argument("--out", type=Path, required=True)
+    comparison.add_argument("--seed", type=int, default=43301)
+    comparison.set_defaults(run=_attempt_compare, extra="craftax")
     args = parser.parse_args()
 
     try:

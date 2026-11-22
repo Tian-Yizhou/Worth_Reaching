@@ -7,7 +7,6 @@ import tomllib
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from hashlib import sha256
 from importlib.metadata import version
 from pathlib import Path
 
@@ -16,16 +15,20 @@ import numpy as np
 from numpy.typing import NDArray
 
 from worth_reaching.data.artifacts import code_revision, write_json
+from worth_reaching.data.craftax_trajectories import (
+    RANDOM_POLICY,
+    SPLIT_VERSION,
+    EpisodeSpec,
+    episode_keys,
+    episode_spec,
+)
 from worth_reaching.envs.craftax import (
     ACTION_NAMES,
     OBSERVATION_SCHEMA,
-    RULES_VERSION,
+    SURVIVAL_TASK,
     TASK,
     CraftaxClassic,
 )
-
-POLICY_ID = "uniform_random_v1"
-SPLIT_VERSION = "craftax-classic-world-hash-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,22 +67,6 @@ class CollectionConfig:
             raise ValueError("Craftax budget must be between 1 and 2147483646")
 
 
-@dataclass(frozen=True, slots=True)
-class EpisodeSpec:
-    world_seed: int
-    world_id: str
-    episode_id: str
-    split: str
-
-
-def episode_spec(seed: int, policy_id: str = POLICY_ID) -> EpisodeSpec:
-    world_id = f"craftax-classic-v{RULES_VERSION}-{seed}"
-    digest = sha256(f"{SPLIT_VERSION}:{world_id}".encode()).digest()
-    bucket = int.from_bytes(digest[:8], "big") % 100
-    split = "train" if bucket < 80 else "dev" if bucket < 90 else "test"
-    return EpisodeSpec(seed, world_id, f"{world_id}-{policy_id}", split)
-
-
 def _random_policy(seed: int) -> Callable[[NDArray[np.float32]], int]:
     rng = np.random.default_rng([seed, 2])
     action_ids = tuple(ACTION_NAMES)
@@ -90,23 +77,21 @@ def _random_policy(seed: int) -> Callable[[NDArray[np.float32]], int]:
     return act
 
 
-def episode_keys(world_seed: int) -> tuple[jax.Array, jax.Array]:
-    root_key = jax.random.key(world_seed)
-    return jax.random.fold_in(root_key, 0), jax.random.fold_in(root_key, 1)
-
-
 def _collect_episode(
     env: CraftaxClassic,
     spec: EpisodeSpec,
     act: Callable[[NDArray[np.float32]], int],
-) -> tuple[list, list, str]:
+) -> tuple[list, list, str, int | None]:
     reset_key, transitions_key = episode_keys(spec.world_seed)
     episode = env.reset(reset_key)
     initial = episode.observation.tolist()
     steps = []
+    first_craft = None
     for index in range(env.budget):
         action = act(episode.observation)
         step = episode.step(action, key=jax.random.fold_in(transitions_key, index))
+        if step.crafted_iron_pickaxe:
+            first_craft = index + 1
         steps.append(
             {
                 "action": action,
@@ -115,16 +100,20 @@ def _collect_episode(
             }
         )
         if step.outcome is not None:
-            return initial, steps, step.outcome
+            return initial, steps, step.outcome, first_craft
     raise RuntimeError(
         "Craftax episode exhausted the budget without a terminal outcome"
     )
 
 
 def collect(
-    config: CollectionConfig, out: Path, expert_checkpoint: Path | None = None
+    config: CollectionConfig,
+    out: Path,
+    expert_checkpoint: Path | None = None,
+    *,
+    task: str = TASK,
 ) -> dict[str, object]:
-    policy_id = POLICY_ID
+    policy_id = RANDOM_POLICY
     policy_factory = _random_policy
     policy_metadata: dict[str, int | str] = {}
     if expert_checkpoint is not None:
@@ -135,9 +124,9 @@ def collect(
         policy_factory = expert.start
         policy_metadata = expert.metadata
 
+    env = CraftaxClassic(config.budget, task)
     revision = code_revision()
     out.mkdir(parents=True, exist_ok=False)
-    env = CraftaxClassic(config.budget)
     specs = [
         episode_spec(seed, policy_id)
         for seed in range(config.seed_start, config.seed_start + config.episodes)
@@ -156,9 +145,9 @@ def collect(
             "run_id": out.name,
             "environment": env.environment_id,
             "environment_version": version("craftax"),
-            "rules_version": RULES_VERSION,
+            "rules_version": env.rules_version,
             "observation_schema": OBSERVATION_SCHEMA,
-            "task": TASK,
+            "task": env.task,
             "policy": policy_id,
             "policy_metadata": policy_metadata,
             "action_names": ACTION_NAMES,
@@ -169,14 +158,17 @@ def collect(
         },
     )
     outcomes = Counter({"success": 0, "death": 0, "timeout": 0})
+    crafted_then = Counter()
     environment_steps = 0
     with gzip.open(
         out / "trajectories.jsonl.gz", "wt", encoding="utf-8", compresslevel=1
     ) as stream:
         for completed, spec in enumerate(specs, start=1):
-            initial, steps, outcome = _collect_episode(
+            initial, steps, outcome, first_craft = _collect_episode(
                 env, spec, policy_factory(spec.world_seed)
             )
+            if first_craft is not None:
+                crafted_then[outcome] += 1
             stream.write(
                 json.dumps(
                     {
@@ -184,6 +176,11 @@ def collect(
                         "initial_observation": initial,
                         "steps": steps,
                         "outcome": outcome,
+                        **(
+                            {"first_craft_step": first_craft}
+                            if task == SURVIVAL_TASK
+                            else {}
+                        ),
                     },
                     separators=(",", ":"),
                 )
@@ -205,5 +202,8 @@ def collect(
         "outcomes": dict(outcomes),
         "split_counts": dict(Counter(spec.split for spec in specs)),
     }
+    if task == SURVIVAL_TASK:
+        summary["crafted_by_deadline"] = sum(crafted_then.values())
+        summary["crafted_then_died"] = crafted_then["death"]
     write_json(out / "summary.json", summary)
     return summary
