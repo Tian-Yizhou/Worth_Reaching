@@ -75,6 +75,21 @@ def _run_grid_routes(args: argparse.Namespace) -> dict[str, object]:
     return run(args.checkpoint, args.out, config)
 
 
+def _run_grid_feedback(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.grid_feedback import FeedbackConfig, run
+
+    config = FeedbackConfig(
+        args.seed,
+        args.updates,
+        args.candidates,
+        args.repeats,
+        args.passage_slip,
+        args.split,
+        args.layouts,
+    )
+    return run(args.checkpoint, args.flow_run, args.out, config)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="wr")
     commands = parser.add_subparsers(required=True)
@@ -137,6 +152,21 @@ def main() -> None:
         "--layouts", type=int, help="Limit evaluated layouts for a smoke run"
     )
     routes.set_defaults(run=_run_grid_routes, extra="craftax")
+    feedback = commands.add_parser(
+        "grid-feedback",
+        help="Train from matched waypoint attempts and freeze the reranker",
+    )
+    feedback.add_argument("--checkpoint", type=Path, required=True)
+    feedback.add_argument("--flow-run", type=Path, required=True)
+    feedback.add_argument("--out", type=Path, required=True)
+    feedback.add_argument("--seed", type=int, default=7)
+    feedback.add_argument("--updates", type=int, default=250)
+    feedback.add_argument("--candidates", type=int, default=8)
+    feedback.add_argument("--repeats", type=int, default=8)
+    feedback.add_argument("--passage-slip", type=float, default=0.85)
+    feedback.add_argument("--split", choices=("dev", "test"), default="dev")
+    feedback.add_argument("--layouts", type=int)
+    feedback.set_defaults(run=_run_grid_feedback, extra="craftax")
     comparison = commands.add_parser(
         "attempt-compare", help="Fit and compare shared-bank selectors"
     )

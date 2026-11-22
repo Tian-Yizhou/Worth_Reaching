@@ -134,6 +134,80 @@ def fit(
     return model, state.params, scale
 
 
+@jax.jit
+def _refine_step(
+    state: TrainState,
+    demonstrations: tuple[jax.Array, jax.Array],
+    attempts: tuple[jax.Array, jax.Array, jax.Array],
+    key: jax.Array,
+    strength: float,
+) -> TrainState:
+    def path(target: jax.Array, key: jax.Array, mask: jax.Array | float):
+        noise_key, time_key = jax.random.split(key)
+        noise = jax.random.normal(noise_key, target.shape)
+        time = jax.random.uniform(time_key, (len(target), 1))
+        velocity = target - noise
+        return noise + time * velocity * mask, time, velocity
+
+    demo_key, attempt_key = jax.random.split(key)
+    demo_context, demo_target = demonstrations
+    context, target, mask = attempts
+    demo_latent, demo_time, demo_velocity = path(demo_target, demo_key, 1.0)
+    latent, time, velocity = path(target, attempt_key, mask)
+
+    def loss(params):
+        demo_error = (
+            state.apply_fn(params, demo_latent, demo_time, demo_context) - demo_velocity
+        )
+        attempt_error = state.apply_fn(params, latent, time, context) - velocity
+        feedback_loss = jnp.sum(jnp.square(attempt_error) * mask) / jnp.maximum(
+            jnp.sum(mask), 1
+        )
+        return jnp.square(demo_error).mean() + strength * feedback_loss
+
+    return state.apply_gradients(grads=jax.grad(loss)(state.params))
+
+
+def refine(
+    model: RouteFlow,
+    weights: dict,
+    demonstration_conditions: jax.Array,
+    demonstration_targets: jax.Array,
+    attempt_conditions: jax.Array,
+    attempt_targets: np.ndarray,
+    credit_mask: np.ndarray,
+    sampling_weights: np.ndarray,
+    *,
+    seed: int,
+    updates: int,
+) -> tuple[dict, dict]:
+    """Match optimizer batches for the demonstration-only and feedback arms."""
+    initial = TrainState.create(
+        apply_fn=model.apply, params=weights, tx=optax.adam(0.0003)
+    )
+    demonstration_only = with_feedback = initial
+    demo_rng = np.random.default_rng([seed, 82])
+    feedback_rng = np.random.default_rng([seed, 83])
+    key = jax.random.key(seed)
+    for step in range(updates):
+        rows = demo_rng.integers(len(demonstration_targets), size=64)
+        labels = feedback_rng.choice(len(attempt_targets), size=64, p=sampling_weights)
+        demonstrations = demonstration_conditions[rows], demonstration_targets[rows]
+        attempts = (
+            attempt_conditions[labels],
+            attempt_targets[labels],
+            credit_mask[labels],
+        )
+        step_key = jax.random.fold_in(key, step)
+        demonstration_only = _refine_step(
+            demonstration_only, demonstrations, attempts, step_key, 0.0
+        )
+        with_feedback = _refine_step(
+            with_feedback, demonstrations, attempts, step_key, 1.0
+        )
+    return demonstration_only.params, with_feedback.params
+
+
 @partial(jax.jit, static_argnames=("model", "candidates", "steps"))
 def sample(
     model: RouteFlow,

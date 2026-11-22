@@ -80,11 +80,17 @@ def rollout(
     slips: np.ndarray,
     *,
     replay: tuple[int, ...] | None = None,
+    passage_slips: np.ndarray | None = None,
+    terminal_policy: np.ndarray | None = None,
 ) -> tuple[Attempt, tuple[int, ...]]:
     """Execute a declared target and its continuation under a supplied repeat stream."""
     position, passages, goal = _geometry(public)
     budget = public.remaining_actions
-    if len(slips) != budget or (replay is not None and len(replay) != budget):
+    if (
+        len(slips) != budget
+        or (replay is not None and len(replay) != budget)
+        or (passage_slips is not None and len(passage_slips) != budget)
+    ):
         raise ValueError("Rollout and replay must cover the whole action budget")
     if waypoint is not None and (
         waypoint.cell in (position, goal)
@@ -100,14 +106,22 @@ def rollout(
         attempting = (
             waypoint is not None and arrived is None and index < waypoint.deadline
         )
-        if replay is None:
+        if replay is not None:
+            action = replay[index]
+        elif not attempting and terminal_policy is not None:
+            action = int(terminal_policy[budget - index, *position])
+        else:
             destination = waypoint.cell if attempting else goal
             _, path = grid.shortest_route(position, destination, passages)
             action = path[0] if path else grid.WAIT
-        else:
-            action = replay[index]
         actions.append(action)
-        position = grid.move(position, grid.WAIT if slip else action, passages)
+        next_position = grid.move(position, grid.WAIT if slip else action, passages)
+        if (
+            passage_slips is None
+            or not passage_slips[index]
+            or not grid.risky_entry(position, next_position)
+        ):
+            position = next_position
         if passage is None and position[0] == grid.WALL_ROW:
             passage = _passage_family(position[1], goal)
         if attempting and position == waypoint.cell:
@@ -321,7 +335,7 @@ def summarize(decisions: list[dict], reference: Counter) -> dict[str, object]:
     }
 
 
-def run(checkpoint: Path, out: Path, config: ExecutionConfig) -> dict[str, object]:
+def load_grid_completion(checkpoint: Path) -> route_flow.FrozenCompletion:
     completion = route_flow.FrozenCompletion.load(checkpoint)
     spec = ModelSpec(8, grid.ACTION_COUNT, grid.GOALS, grid.BUDGET)
     if (
@@ -333,6 +347,12 @@ def run(checkpoint: Path, out: Path, config: ExecutionConfig) -> dict[str, objec
         raise ValueError(
             "Expected a grid checkpoint with matching splits and full masked routes"
         )
+    return completion
+
+
+def run(checkpoint: Path, out: Path, config: ExecutionConfig) -> dict[str, object]:
+    completion = load_grid_completion(checkpoint)
+    spec = completion.spec
     starts = grid.grid_starts(
         include_test=config.split == "test", include_reference=True
     )

@@ -8,6 +8,7 @@ Use Python 3.12 or newer and run from the repository root. The [quick start](../
 | `results/completion.*/` | Masked trajectory windows and export manifests |
 | `results/grid-completion.*/` | Paired grid predictor weights, world assignments and evaluation |
 | `results/grid-routes.*/` | Latent flow checkpoints and matched attempt records |
+| `results/grid-feedback.*/` | Training attempts, target masks, updated flows and held-out feedback comparisons |
 | `results/checkpoints/` | Policy and model weights |
 | `results/external/` | Isolated benchmark source trees and environments |
 | `results/_archive/` | Archived experiment runs, code snapshots and path maps |
@@ -75,6 +76,16 @@ The grid executor plans shortest paths using the public map. It recomputes after
 The reference frequency counts one passage per demonstration. The candidate pool covers a route family when one valid target both arrives and succeeds through that passage in at least half its repeats. Coverage of both passages requires two different targets or deadlines. The low-support family threshold is 25% of reference episodes. This is a diagnostic of demonstrated passage families. The paired terminal difference between feedback and open loop includes a layout bootstrap interval.
 
 The default split is development. Once settings are fixed, use `--split test` and independent `--seed` values. `--layouts`, `--candidates`, `--repeats` and `--updates` can shorten a smoke run. `flow.msgpack`, `decisions.jsonl`, `manifest.json` and `summary.json` record weights, proposed latent targets, repeat masks, attempt results, and checkpoint provenance.
+
+## Train from execution feedback
+
+Run `wr grid-feedback --checkpoint PATH --flow-run PATH --out PATH` with the completion and flow checkpoints. The diagnostic retains the 14-action task and the 15% action-to-wait probability. An attempted entry into an inner wall passage also independently becomes a wait with probability 85%. The executor in every waypoint arm continues to use feedback and shortest paths, followed by the same direct continuation. The direct baselines use shortest paths or finite-horizon dynamic programming with the public transition probabilities.
+
+The frozen flow draws candidates on training layouts. A supervised reranker predicts arrival and terminal success from public path lengths, deadline slack and risky passage entries. Terminal success counts the full rollout after an attempt, including recovery after a miss. For the generator update, a candidate must arrive in at least 25% of repeats and outperform the mean terminal success of valid candidates from the same start and goal. Its sampling weight is the product of the positive terminal advantage and the arrival rate. Feedback supervises the latent slot of the attempted waypoint. The training objective also uses the full demonstrated trajectories.
+
+The frozen flow, demonstration-only continuation and feedback update share the same reranker and executor. The two updated flows have matched demonstration batches and optimizer steps. Evaluation uses matched base noise and repeat masks across arms, distinct from the training streams. Proposals are selected before rollouts. Report selection by predicted terminal success and selection by predicted arrival on the shared frozen pool. Report terminal success and low-support pool coverage under the same candidate and rollout counts. Bootstrap paired differences by layout.
+
+Development is the default split. Use `--split test` for confirmation after fixing settings. The run saves training and held-out attempts, credited slots, repeat masks, the frozen reranker, the two updated weight sets and separate interaction counts. [Execution contract](architecture.md#execution-feedback)
 
 ## Compare selectors on matched attempts
 

@@ -68,6 +68,16 @@ JAX_PLATFORMS=cpu uv run --no-sync wr grid-routes \
   --checkpoint "$run_dir/model" --out "$run_dir/routes" --layouts 2
 ```
 
+### Train the route generator from execution feedback
+
+Use the checkpoint and sampled flow from the preceding commands. This diagnostic learns from matched attempts on training layouts and compares generators with one fixed reranker. [Feedback protocol](docs/experiments.md#train-from-execution-feedback)
+
+```bash
+JAX_PLATFORMS=cpu uv run --no-sync wr grid-feedback \
+  --checkpoint "$run_dir/model" --flow-run "$run_dir/routes" --out "$run_dir/feedback" \
+  --updates 10 --layouts 2
+```
+
 ### Longer server runs
 
 The experiment guide covers matched expert and random collection, artifact locations, and selection on shared banks of prospective attempts. [Running experiments](docs/experiments.md)

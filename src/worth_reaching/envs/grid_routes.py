@@ -36,6 +36,12 @@ def is_free(position: Position, passages: tuple[int, ...]) -> bool:
     return 0 <= y < SIZE and 0 <= x < SIZE and (y != WALL_ROW or x in passages)
 
 
+def risky_entry(start: Position, destination: Position) -> bool:
+    return (
+        start[0] != WALL_ROW and destination[0] == WALL_ROW and destination[1] in (1, 5)
+    )
+
+
 def move(position: Position, action: int, passages: tuple[int, ...]) -> Position:
     if action == WAIT:
         return position

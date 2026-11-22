@@ -67,6 +67,10 @@ The trainer pads the recent history and uses evenly spaced queries across longer
 
 The grid flow learns the difference between a frozen prediction and an encoded demonstration for the complete interior window. It conditions on the starting observation, the goal and the frozen prediction. Each draw decodes to a route and declares one intermediate cell and attempt deadline. A feedback executor uses the observed cell to choose the next action. After arrival or timeout the same controller continues toward the terminal objective with the remaining budget. The evaluation runner supplies repeat streams, pairs those streams across candidates and saves the attempted latent target separately from the observed results. The route diagnostic uses a fixed grid horizon and exact public cell arrival. [Route generation and execution protocol](experiments.md#sample-and-execute-alternative-routes)
 
+## Execution feedback
+
+Training rollouts record arrival and terminal success for predeclared targets. The supervised reranker fits on training attempts and accepts only public candidate features. Flow refinement pairs complete demonstration targets with masked feedback targets whose loss applies to the attempted latent position. A demonstration-only update controls for the additional optimizer steps. The evaluator keeps repeat masks and held-out outcomes outside the input to all selectors. [Feedback training protocol](experiments.md#train-from-execution-feedback)
+
 ## Shared-attempt evaluation contract
 
 The shared-attempt comparison fits its scoring heads on training starts and selects the reachability threshold on development starts. Each external simulator can export a `shared_attempts_v1` bank with disjoint root `world_id`s, fixed public features, a `direct` arm, and ordered matched trials for each candidate. An optional `native_choice` identifies the native selector's choice from the same bank. `public_bank` projects each record to the selection input. Selection uses only these projected fields. The evaluator uses the held-out arrival and terminal labels to score the frozen choices.

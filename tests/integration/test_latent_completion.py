@@ -178,6 +178,44 @@ def test_training_cli_saves_public_input_predictors(tmp_path):
     ]
     assert row["candidates"][2]["trials"] == row["candidates"][2]["open_loop"]
 
+    feedback = tmp_path / "feedback"
+    subprocess.run(
+        [
+            "wr",
+            "grid-feedback",
+            "--checkpoint",
+            out,
+            "--flow-run",
+            routes,
+            "--out",
+            feedback,
+            "--updates",
+            "2",
+            "--layouts",
+            "1",
+            "--candidates",
+            "2",
+            "--repeats",
+            "2",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = json.loads((feedback / "summary.json").read_text())
+    settings = json.loads((feedback / "manifest.json").read_text())
+    sets = [set(group) for group in settings["layouts"].values()]
+    assert len(set.union(*sets)) == sum(map(len, sets))
+    assert result["evaluation_cases"] == 18 and result["training_cases"] == 576
+    assert set(result["arms"]) == {"frozen", "demonstrations", "feedback"}
+    with np.load(feedback / "feedback_targets.npz") as labels:
+        assert len(labels["mask"]) == result["credited_waypoints"]
+        assert (labels["mask"].sum(axis=1) == config.latent_size).all()
+        assert not (labels["targets"] * (1 - labels["mask"])).any()
+    with np.load(feedback / "repeat_masks.npz") as masks:
+        assert masks["training"].shape == (576, 2, spec.budget, 2)
+        assert masks["evaluation"].shape == (18, 2, spec.budget, 2)
+
 
 def test_rollout_retains_terminal_success_after_waypoint_miss():
     np = pytest.importorskip("numpy")
@@ -185,6 +223,7 @@ def test_rollout_retains_terminal_success_after_waypoint_miss():
     from worth_reaching.data.completion import CompletionInput
     from worth_reaching.envs import grid_routes as grid
     from worth_reaching.evaluation.grid_execution import Waypoint, rollout
+    from worth_reaching.evaluation.grid_feedback import _optimal_policy
 
     start, markers = (2, 2), ((5, 0), (5, 6))
     observation = grid.grid_observation(start, (1, 5), markers)
@@ -207,3 +246,24 @@ def test_rollout_retains_terminal_success_after_waypoint_miss():
     assert open_loop.arrived_step is None and not open_loop.success
     with pytest.raises(ValueError, match="unachieved"):
         rollout(public, Waypoint(start, 1), slips)
+
+    passages = (1, 6)
+    threatened = CompletionInput(
+        grid.grid_observation(start, passages, ((5, 1), (5, 6)))[None],
+        public.actions,
+        public.goal,
+        public.remaining_actions,
+        public.query_steps,
+    )
+    slips[:] = False
+    gate_slips = np.ones(grid.BUDGET, dtype=bool)
+    direct, _ = rollout(threatened, None, slips, passage_slips=gate_slips)
+    risk_aware, _ = rollout(
+        threatened,
+        None,
+        slips,
+        passage_slips=gate_slips,
+        terminal_policy=_optimal_policy((5, 1), passages, 1.0),
+    )
+    assert not direct.success
+    assert risk_aware.success and risk_aware.passage == "far"
