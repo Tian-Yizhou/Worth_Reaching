@@ -71,6 +71,12 @@ The grid flow learns the difference between a frozen prediction and an encoded d
 
 Training rollouts record arrival and terminal success for predeclared targets. The supervised reranker fits on training attempts and accepts only public candidate features. Flow refinement pairs complete demonstration targets with masked feedback targets whose loss applies to the attempted latent position. A demonstration-only update controls for the additional optimizer steps. The evaluator keeps repeat masks and held-out outcomes outside the input to all selectors. [Feedback training protocol](experiments.md#train-from-execution-feedback)
 
+## AntMaze baseline
+
+The raw OGBench archive reader extracts public observations and actions. Terminal markers split stored trajectories and exclude their final padding actions. The hindsight sampler pairs an action at a nonfinal row with a later observation from the same trajectory. The actor maps the current observation and public goal observation to a continuous action. Training and validation use separate archives.
+
+The evaluator records task and reset IDs, MuJoCo integration state, task goal and the exact public tensors from the reset. Each rollout restores the snapshot and starts with the saved goal. The actor receives only the latest public observation and the public goal. The evaluator uses the benchmark's success event, including its occurrence on the final allowed action. Development and test use disjoint reset seeds. [AntMaze baseline protocol](experiments.md#train-the-antmaze-gcbc-baseline)
+
 ## Shared-attempt evaluation contract
 
 The shared-attempt comparison fits its scoring heads on training starts and selects the reachability threshold on development starts. Each external simulator can export a `shared_attempts_v1` bank with disjoint root `world_id`s, fixed public features, a `direct` arm, and ordered matched trials for each candidate. An optional `native_choice` identifies the native selector's choice from the same bank. `public_bank` projects each record to the selection input. Selection uses only these projected fields. The evaluator uses the held-out arrival and terminal labels to score the frozen choices.

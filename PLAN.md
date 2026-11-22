@@ -18,6 +18,8 @@ Milestone 3 adds a grid diagnostic that samples several latent routes for one go
 
 Milestone 4 has a feedback-training diagnostic with stochastic passage entry. It compares a frozen flow, an equally trained demonstration-only update and an update that adds matched execution feedback. All three use a fixed reranker. The next benchmark uses state-based AntMaze for controlled navigation and stitching comparisons. [Feedback protocol](docs/experiments.md#train-from-execution-feedback) · [Benchmark sequence](docs/experiment_env.md#robotics-benchmark-sequence)
 
+Milestone 5 starts with state AntMaze-Large. `wr antmaze-gcbc` reads the official navigation and stitching archives, trains a goal-conditioned executor and evaluates it from a reusable set of simulator starts and public goals. [AntMaze baseline protocol](docs/experiments.md#train-the-antmaze-gcbc-baseline)
+
 ## Evaluation protocol
 
 Keep exploratory development worlds separate from test worlds. Freeze decision rules before the final comparison. Compare methods on matched starts and independent repeat streams. When isolating proposal quality, share the executor, terminal objective and candidate budget. Record all environment interactions used for training, proposal updates and evaluation. [Architecture](docs/architecture.md) · [Running experiments](docs/experiments.md)

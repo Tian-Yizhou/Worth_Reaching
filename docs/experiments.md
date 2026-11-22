@@ -9,6 +9,7 @@ Use Python 3.12 or newer and run from the repository root. The [quick start](../
 | `results/grid-completion.*/` | Paired grid predictor weights, world assignments and evaluation |
 | `results/grid-routes.*/` | Latent flow checkpoints and matched attempt records |
 | `results/grid-feedback.*/` | Training attempts, target masks, updated flows and held-out feedback comparisons |
+| `results/antmaze-gcbc.*/` | GCBC checkpoints, matched reset banks and per-task rollout outcomes |
 | `results/checkpoints/` | Policy and model weights |
 | `results/external/` | Isolated benchmark source trees and environments |
 | `results/_archive/` | Archived experiment runs, code snapshots and path maps |
@@ -100,3 +101,27 @@ uv run --no-sync wr attempt-compare \
 ```
 
 The summary reports terminal success, arrival, success after a missed target and paired differences by world. Each actual attempt includes the time spent pursuing the target and a continuation with the remaining budget. [Research design](trajectory-completion.md)
+
+## Train the AntMaze GCBC baseline
+
+Install the locked OGBench extra. The following command downloads the state-based train and validation archives when they are absent. [OGBench dataset API](https://github.com/seohongpark/ogbench#dataset-apis)
+
+```bash
+uv sync --locked --group dev --extra ogbench
+uv run --no-sync python -c 'import ogbench; ogbench.download_datasets(["antmaze-large-navigate-v0", "antmaze-large-stitch-v0"], dataset_dir="results/datasets/ogbench")'
+```
+
+`wr antmaze-gcbc` trains an MLP by action MSE using public observations, hindsight goals drawn within each trajectory and the relative goal displacement. Training statistics normalize the public inputs. The command scores held-out action MSE on the official validation archive and closed-loop success on the five simulator tasks. The zero-action control is a rollout sanity check. [OGBench reference GCBC](https://github.com/seohongpark/ogbench/blob/master/impls/agents/gcbc.py)
+
+```bash
+run_dir="$(mktemp -d results/antmaze-gcbc.XXXXXX)"
+JAX_PLATFORMS=cpu uv run --no-sync wr antmaze-gcbc \
+  --dataset antmaze-large-navigate-v0 --updates 2000 --width 128 --out "$run_dir/navigate"
+JAX_PLATFORMS=cpu uv run --no-sync wr antmaze-gcbc \
+  --dataset antmaze-large-stitch-v0 --updates 2000 --width 128 \
+  --starts "$run_dir/navigate/starts.npz" --out "$run_dir/stitch"
+```
+
+Reuse `starts.npz` across comparisons with the same evaluation split and repeat count. The bank stores the exact reset observations, goals and integration state. The default evaluates four repeats for each task on development seeds with the 1,000-action horizon. Use `--eval-split test` after locking the recipe. Lower `--eval-steps` or `--eval-repeats` for smoke runs. A success comes from the benchmark's binary success event. The episode log also stores the initial, closest and final Euclidean distances in public XY coordinates.
+
+Each run saves its recipe and archive hashes in `manifest.json`, validation checkpoints in `history.json`, parameters and normalization separately, full optimizer state in `training.msgpack`, and exact starts and outcomes in `starts.npz` and `episodes.json`. To resume, pass `--resume PREVIOUS_RUN`, use the same training recipe and archives, specify a new output directory and set `--updates` to the new total. Setting that total to the checkpoint step reruns evaluation at the saved weights. The batch stream is indexed by update so it resumes at the same batch as an uninterrupted run.

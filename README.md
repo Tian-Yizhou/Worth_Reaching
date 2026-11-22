@@ -82,11 +82,25 @@ JAX_PLATFORMS=cpu uv run --no-sync wr grid-feedback \
 
 The experiment guide covers matched expert and random collection, artifact locations, and selection on shared banks of prospective attempts. [Running experiments](docs/experiments.md)
 
-## Contributing
+### Train a state-based AntMaze baseline
 
-Choose a focused change from the implementation plan and include a reproducible check. For the full CPU test suite, install both environment extras as shown in the Craftax quick start. [Contribution guide](CONTRIBUTING.md) · [Implementation plan](PLAN.md)
+Use the official state AntMaze-Large archives to train a goal-conditioned continuous-action policy. The development smoke run uses a saved reset and goal for each of the five benchmark tasks. [Dataset setup and matched evaluation](docs/experiments.md#train-the-antmaze-gcbc-baseline)
 
 ```bash
+uv sync --locked --group dev --extra ogbench
+mkdir -p results
+run_dir="$(mktemp -d results/antmaze-gcbc.XXXXXX)"
+JAX_PLATFORMS=cpu uv run --no-sync wr antmaze-gcbc \
+  --dataset antmaze-large-navigate-v0 --out "$run_dir/navigate" \
+  --updates 1000 --eval-repeats 1 --eval-steps 100
+```
+
+## Contributing
+
+Choose a focused change from the implementation plan and include a reproducible check. Install the MiniGrid, Craftax and OGBench extras for the full CPU test suite. [Contribution guide](CONTRIBUTING.md) · [Implementation plan](PLAN.md)
+
+```bash
+uv sync --locked --group dev --extra minigrid --extra craftax --extra ogbench
 uv run --no-sync ruff check .
 uv run --no-sync ruff format --check src tests scripts
 JAX_PLATFORMS=cpu uv run --no-sync pytest

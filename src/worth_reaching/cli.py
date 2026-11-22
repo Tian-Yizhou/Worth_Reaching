@@ -90,6 +90,30 @@ def _run_grid_feedback(args: argparse.Namespace) -> dict[str, object]:
     return run(args.checkpoint, args.flow_run, args.out, config)
 
 
+def _antmaze_gcbc(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.antmaze import EvalConfig, TrainConfig, run
+
+    train = TrainConfig(
+        seed=args.seed,
+        width=args.width,
+        batch_size=args.batch_size,
+        max_trajectories=args.max_trajectories,
+        max_goal_steps=args.max_goal_steps,
+    )
+    evaluation = EvalConfig(args.eval_split, args.eval_repeats, args.eval_steps)
+    return run(
+        args.dataset,
+        args.data_dir,
+        args.out,
+        train,
+        evaluation,
+        updates=args.updates,
+        checkpoint_every=args.checkpoint_every,
+        resume=args.resume,
+        start_bank=args.starts,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="wr")
     commands = parser.add_subparsers(required=True)
@@ -167,6 +191,32 @@ def main() -> None:
     feedback.add_argument("--split", choices=("dev", "test"), default="dev")
     feedback.add_argument("--layouts", type=int)
     feedback.set_defaults(run=_run_grid_feedback, extra="craftax")
+    antmaze = commands.add_parser(
+        "antmaze-gcbc",
+        help="Train goal-conditioned cloning and score saved AntMaze starts",
+    )
+    antmaze.add_argument("--dataset", default="antmaze-large-navigate-v0")
+    antmaze.add_argument(
+        "--data-dir", type=Path, default=Path("results/datasets/ogbench")
+    )
+    antmaze.add_argument("--out", type=Path, required=True)
+    antmaze.add_argument("--seed", type=int, default=7)
+    antmaze.add_argument("--updates", type=int, default=1000)
+    antmaze.add_argument("--checkpoint-every", type=int, default=1000)
+    antmaze.add_argument("--width", type=int, default=256)
+    antmaze.add_argument("--batch-size", type=int, default=256)
+    antmaze.add_argument("--max-trajectories", type=int)
+    antmaze.add_argument("--max-goal-steps", type=int)
+    antmaze.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    antmaze.add_argument("--eval-repeats", type=int, default=4)
+    antmaze.add_argument("--eval-steps", type=int, default=1000)
+    antmaze.add_argument(
+        "--starts", type=Path, help="Reuse a matching saved AntMaze start bank"
+    )
+    antmaze.add_argument(
+        "--resume", type=Path, help="Continue from a compatible training run"
+    )
+    antmaze.set_defaults(run=_antmaze_gcbc, extra="ogbench")
     comparison = commands.add_parser(
         "attempt-compare", help="Fit and compare shared-bank selectors"
     )
@@ -186,7 +236,9 @@ def main() -> None:
             "craftax",
             "flax",
             "jax",
+            "mujoco",
             "numpy",
+            "ogbench",
             "optax",
         }:
             raise
