@@ -49,3 +49,9 @@ class PointMaze:
             bool(info["success"]),
             bool(terminated or truncated),
         )
+
+    def arrived(self, observation: np.ndarray, target: np.ndarray) -> bool:
+        """Apply the native sparse goal predicate to a public target position."""
+        return bool(
+            self.environment.unwrapped.compute_reward(observation[:2], target[:2], {})
+        )

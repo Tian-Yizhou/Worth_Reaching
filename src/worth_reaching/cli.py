@@ -198,7 +198,6 @@ def _pointmaze_latent(args: argparse.Namespace) -> dict[str, object]:
         CompletionConfig(
             seed=args.seed,
             windows=args.windows,
-            max_horizon=POINTMAZE_TASKS[args.task].action_limit,
             codec_updates=args.codec_updates,
             predictor_updates=args.predictor_updates,
             flow_updates=args.flow_updates,
@@ -209,6 +208,33 @@ def _pointmaze_latent(args: argparse.Namespace) -> dict[str, object]:
         repeats=args.eval_repeats,
         limit=args.eval_steps,
         resume=args.resume,
+    )
+
+
+def _pointmaze_first_targets(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.pointmaze_probe import run
+
+    return run(
+        args.data_dir,
+        args.runs,
+        args.out,
+        args.max_starts,
+        compare_continuations=args.compare_continuations,
+    )
+
+
+def _pointmaze_latent_energy(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.pointmaze_energy import run
+
+    return run(
+        args.data_dir,
+        args.runs,
+        args.out,
+        split=args.eval_split,
+        repeats=args.eval_repeats,
+        prefix_length=args.prefix_length,
+        candidates=args.candidates,
+        density_samples=args.density_samples,
     )
 
 
@@ -450,9 +476,42 @@ def main() -> None:
     pointmaze.add_argument(
         "--eval-steps",
         type=int,
-        help="Action limit (defaults to the official task limit)",
+        help="Shared training span and evaluation budget (default determined from the archive)",
     )
     pointmaze.set_defaults(run=_pointmaze_latent, extra="pointmaze")
+    first_targets = commands.add_parser(
+        "pointmaze-first-targets",
+        help="Evaluate frozen PointMaze first targets from matched resets",
+    )
+    first_targets.add_argument("--runs", nargs="+", type=Path, required=True)
+    first_targets.add_argument(
+        "--data-dir", type=Path, default=Path("results/datasets/minari")
+    )
+    first_targets.add_argument("--out", type=Path, required=True)
+    first_targets.add_argument(
+        "--max-starts", type=int, help="Limit starts for a smoke check"
+    )
+    first_targets.add_argument(
+        "--compare-continuations",
+        action="store_true",
+        help="Use the first sampled target and compare direct and replanning continuations",
+    )
+    first_targets.set_defaults(run=_pointmaze_first_targets, extra="pointmaze")
+    latent_energy = commands.add_parser(
+        "pointmaze-latent-energy",
+        help="Test frozen latent energy against matched PointMaze candidate attempts",
+    )
+    latent_energy.add_argument("--runs", nargs="+", type=Path, required=True)
+    latent_energy.add_argument(
+        "--data-dir", type=Path, default=Path("results/datasets/minari")
+    )
+    latent_energy.add_argument("--out", type=Path, required=True)
+    latent_energy.add_argument("--eval-split", choices=("dev", "test"), default="test")
+    latent_energy.add_argument("--eval-repeats", type=int, default=64)
+    latent_energy.add_argument("--prefix-length", type=int, default=1)
+    latent_energy.add_argument("--candidates", type=int, default=16)
+    latent_energy.add_argument("--density-samples", type=int, default=256)
+    latent_energy.set_defaults(run=_pointmaze_latent_energy, extra="pointmaze")
     kuka = commands.add_parser(
         "kuka-latent",
         help="Train and evaluate latent completion on conditional Kuka stacking",

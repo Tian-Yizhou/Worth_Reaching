@@ -213,7 +213,7 @@ The evaluator follows the official maze distance map along one shortest cell pat
 
 Diffuser's Maze2D experiment uses endpoint conditioning with four state coordinates and follows the generated states with position and velocity feedback. These pilots use Farama's maintained evaluation specifications. The paper reports scores on the original D4RL `maze2d-*-v1` environments and datasets. A same-version benchmark will run both methods on the same environments under matched budgets. [Diffuser task configuration](https://github.com/jannerm/diffuser/blob/maze2d/config/maze2d.py) · [Diffuser controller and evaluation](https://github.com/jannerm/diffuser/blob/maze2d/scripts/plan_maze2d.py)
 
-| `--task` | Gymnasium environment | Action limit | Minari dataset |
+| `--task` | Gymnasium environment | Official action limit | Minari dataset |
 | --- | --- | ---: | --- |
 | `umaze` | `PointMaze_UMaze-v3` | 300 | [`D4RL/pointmaze/umaze-v2`](https://minari.farama.org/datasets/D4RL/pointmaze/umaze-v2/#evaluation-environment-specs) |
 | `medium` (default) | `PointMaze_Medium-v3` | 600 | [`D4RL/pointmaze/medium-v2`](https://minari.farama.org/datasets/D4RL/pointmaze/medium-v2/#evaluation-environment-specs) |
@@ -233,9 +233,60 @@ for task in umaze medium large; do
 done
 ```
 
-Include `--extra pointmaze` alongside any installed extras you want to keep. Each Minari archive contains a continuing collection. The loader uses the first 80% of episodes by ID for fitting, skips the boundary episode and holds out the suffix for offline reconstruction and prediction diagnostics. The evaluator uses paired seeded resets on the fixed-goal, continuing task. Both arms use the task's action limit and the same position and velocity controller. Use `--eval-steps` for a shorter run. Direct execution tracks the terminal goal. Latent execution uses the earliest decoded state of the first sampled route and replans when the queried time offset elapses. Terminal success means the native success event occurred by the action limit. Sparse return is summed across the whole episode, including success steps. Use `--eval-split test` after fixing the recipe.
+Include `--extra pointmaze` alongside any installed extras you want to keep. Each Minari archive contains a continuing collection. The loader uses the first 80% of episodes by ID for fitting, skips the boundary episode and holds out the suffix for offline reconstruction and prediction diagnostics. The evaluator uses paired seeded resets on the fixed-goal, continuing task and a shared position and velocity controller.
+
+The training span and the evaluation action budget are set together. By default, the span is the 90th percentile of training episode lengths eligible for masking, capped by the official action limit and the longest validation episode. Set `--eval-steps` explicitly to fix a budget across archives. A requested span must be supported by both training and validation episodes. A quarter of each sample set is reserved for exact full-span windows beginning at the first observation of a sufficiently long episode. The remaining windows cover varying spans and histories. The manifest records the chosen span, source episode counts, and realized window coverage.
+
+Direct execution tracks the terminal goal. Latent execution follows the earliest decoded state of the first sampled route and replans when the queried time offset elapses. Terminal success counts native success events through the chosen budget. Sparse return is summed across that same budget. Use `--eval-split test` after fixing the recipe. Archived `v2` runs can still be probed at their recorded budgets, including evaluation spans beyond their training coverage. The aligned pilot budgets should be stated when comparing scores.
 
 The run stores the data hashes and versions in `manifest.json`, archive episode IDs in `split.json`, sampled latent and decoded routes in `plans.jsonl.gz`, executed public states in `trajectories.npz`, and scores in `episodes.json` and `summary.json`.
+
+### Diagnose frozen Maze2D first targets
+
+Use completed runs with the same task, prediction span, reset bank, environment versions, and dataset. The probe restores the predictor, codec, and flow from the saved weights and uses the original first query time and sampling seed. Here is a two-seed Medium run with the archive-derived budget.
+
+```bash
+run_dir="$(mktemp -d results/pointmaze-horizon-aligned.XXXXXX)"
+for seed in 7 19; do
+  uv run --no-sync wr pointmaze-latent --task medium --seed "$seed" \
+    --windows 16000 --codec-updates 1200 --predictor-updates 4800 \
+    --flow-updates 1600 --eval-repeats 24 --out "$run_dir/medium-$seed"
+done
+uv run --no-sync wr pointmaze-first-targets \
+  --runs "$run_dir"/medium-{7,19} --out "$run_dir/first-targets"
+```
+
+For each reset, compare direct terminal tracking, the decoded forecast, and the first state of each sampled route. Every candidate uses the same feedback controller and switches to direct terminal tracking on arrival or at the first query deadline. Arrival applies the benchmark's native sparse-goal rule to public XY. Terminal success uses the original environment goal and the budget recorded by the training run.
+
+A diagnostic branch uses the public state at the first query time from the same-reset archived trajectory that achieved terminal success earliest after that time. A reset without such a trajectory has no reference branch. The reference uses future outcomes and is evaluated under the same controller and continuation as the generated targets. The summary counts both successes with and without arrival in the allotted time, plus the number of starts where any sampled candidate succeeds in hindsight. The per-start targets, outcomes and archived reference sources are in `episodes.json`, and public rollout states are in `trajectories.npz`. Use `--max-starts 1` for a smoke test.
+
+### Compare continuations after the same Maze2D prefix
+
+```bash
+uv run --no-sync wr pointmaze-first-targets --compare-continuations \
+  --runs "$run_dir"/medium-{7,19} --out "$run_dir/continuations"
+```
+
+Each model selects the earliest state of its first sampled route. Both branches use the same feedback controller to pursue that target until arrival or the first query deadline. The evaluator replays the same reset and verifies that the actions and public observations match through the handoff. One branch then tracks the terminal goal directly. The other begins replanning at the handoff using the actual observation and action history and the remaining budget. Subsequent replans use the model's original time-based schedule and selection rule. The direct-from-reset arm measures terminal tracking without the shared prefix.
+
+The summary reports paired terminal wins, losses, and results after arrival and after a miss. The action budget is matched. The replanning branch uses additional model calls, which are reported with rollout time. The episode log records each handoff and subsequent selected target. The trajectory archive contains public branch states and the verified shared actions.
+
+### Test latent energy against terminal success
+
+Use the span-aligned checkpoints from the two-seed Medium run above. Each start supplies a public reset observation, terminal goal, and remaining budget. The frozen world model and its completion flow draw candidates and an independent reference sample. Both draws are truncated to the prefix that will be attempted. The score is the negative log Gaussian-smoothed marginal density of that prefix under the flow draws, divided by the number of latent coordinates and reported up to a fixed additive constant. Smoothing uses the frozen residual normalization and Scott's bandwidth in those coordinates. The predictor's squared latent error is recorded as a separate ranking on the same candidates. This setup compares rankings without fitting either score to execution outcomes.
+
+```bash
+uv run --no-sync wr pointmaze-latent-energy --runs "$run_dir"/medium-{7,19} \
+  --eval-split test --eval-repeats 64 --prefix-length 1 \
+  --candidates 16 --density-samples 256 --out "$run_dir/energy-single"
+uv run --no-sync wr pointmaze-latent-energy --runs "$run_dir"/medium-{7,19} \
+  --eval-split test --eval-repeats 64 --prefix-length 2 \
+  --candidates 16 --density-samples 256 --out "$run_dir/energy-pair"
+```
+
+The evaluator first writes all candidates, energy scores, and selections to `candidate-bank.json` and records its hash. It then replays each reset and attempts every declared candidate. The shared controller pursues the decoded targets in order, using the original absolute query deadlines. The benchmark's native sparse rule measures arrival in public XY. The first miss or the final arrival hands control to direct terminal tracking for the rest of the budget. The pair experiment scores and attempts both positions in order. Any suffix after the attempted prefix is integrated out by projecting the independent reference draws onto that prefix.
+
+`episodes.json` records attempted targets by candidate index, stage arrival or miss, steps spent, remaining budget, and terminal success. `summary.json` compares lowest and highest energy, lowest forecast error, the first flow draw, and the expected success of uniform choice on the shared bank. It also reports the direct-from-reset baseline and includes terminal successes after a missed target. The experiment measures conditional model energy across candidates within a start and prefix length. Reference draws estimate model density, while demonstration prevalence requires a separate measurement on the source trajectories. Set `--eval-split dev --eval-repeats 1 --candidates 3 --density-samples 16` for a smoke check.
 
 ## Run conditional Kuka stacking
 
