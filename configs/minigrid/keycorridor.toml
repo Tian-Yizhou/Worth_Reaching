@@ -1,0 +1,9 @@
+seed = 2
+budget = 14
+# Fetch the key, open the east door, drop the key behind us, and face north.
+prefix = [
+    "toggle", "forward", "pickup", "right", "right", "forward",
+    "toggle", "forward", "right", "right", "drop", "right",
+]
+# Turn toward the ball, or spend a step walking into the wall.
+interventions = ["right", "forward"]

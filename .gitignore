@@ -221,3 +221,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Experiment output
+/results/
+/artifacts/
+/runs/
+checkpoint/
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+*.safetensors

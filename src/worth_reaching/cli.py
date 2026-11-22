@@ -1,0 +1,498 @@
+"""Command-line entry point for Worth Reaching experiments."""
+
+import argparse
+import json
+from pathlib import Path
+
+from worth_reaching.compute import ComputeConfig
+from worth_reaching.envs.pointmaze_tasks import TASKS as POINTMAZE_TASKS
+
+
+def _devices(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.models.parallel import probe
+
+    return probe(args.batch_size)
+
+
+def _run_pilot(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.keycorridor import PilotConfig, run_pilot
+
+    return run_pilot(PilotConfig.load(args.config), args.out)
+
+
+def _collect(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.data.collection import CollectionConfig, collect
+    from worth_reaching.envs.craftax import TASK
+
+    config = CollectionConfig.load(
+        args.config,
+        episodes=args.episodes,
+        budget=args.budget,
+        seed_start=args.seed_start,
+    )
+    return collect(
+        config,
+        args.out,
+        expert_checkpoint=args.expert_checkpoint,
+        task=args.task or TASK,
+    )
+
+
+def _attempt_compare(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.attempt_selection import compare_attempt_banks
+
+    return compare_attempt_banks(args.train, args.dev, args.test, args.out, args.seed)
+
+
+def _prepare_windows(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.data.completion import WindowConfig, prepare_craftax_windows
+
+    config = WindowConfig(
+        args.seed, args.windows_per_episode, args.min_span, args.max_span
+    )
+    return prepare_craftax_windows(args.collection, args.out, config)
+
+
+def _train_completion(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.completion import run_completion_training
+    from worth_reaching.models.completion import TrainingConfig
+
+    config = TrainingConfig(
+        seed=args.seed,
+        encoder_updates=args.encoder_updates,
+        updates=args.updates,
+        history_length=args.history_length,
+        queries_per_window=args.queries_per_window,
+    )
+    return run_completion_training(
+        args.out, config, source=args.windows, evaluate_test=args.evaluate_test
+    )
+
+
+def _run_grid_routes(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.grid_execution import ExecutionConfig, run
+
+    config = ExecutionConfig(
+        seed=args.seed,
+        updates=args.updates,
+        candidates=args.candidates,
+        repeats=args.repeats,
+        slip_probability=args.slip_probability,
+        split=args.split,
+        layouts=args.layouts,
+    )
+    return run(args.checkpoint, args.out, config)
+
+
+def _run_grid_feedback(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.grid_feedback import FeedbackConfig, run
+
+    config = FeedbackConfig(
+        args.seed,
+        args.updates,
+        args.candidates,
+        args.repeats,
+        args.passage_slip,
+        args.split,
+        args.layouts,
+    )
+    return run(args.checkpoint, args.flow_run, args.out, config)
+
+
+def _antmaze_gcbc(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.antmaze import EvalConfig, TrainConfig, run
+
+    train = TrainConfig(
+        seed=args.seed,
+        width=args.width,
+        batch_size=args.batch_size,
+        max_trajectories=args.max_trajectories,
+        max_goal_steps=args.max_goal_steps,
+    )
+    evaluation = EvalConfig(args.eval_split, args.eval_repeats, args.eval_steps)
+    return run(
+        args.dataset,
+        args.data_dir,
+        args.out,
+        train,
+        evaluation,
+        updates=args.updates,
+        checkpoint_every=args.checkpoint_every,
+        resume=args.resume,
+        start_bank=args.starts,
+    )
+
+
+def _antmaze_waypoints(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.antmaze import EvalConfig
+    from worth_reaching.evaluation.antmaze_waypoints import WaypointConfig, run
+
+    evaluation = EvalConfig(args.eval_split, args.eval_repeats, args.eval_steps)
+    waypoint = WaypointConfig(
+        args.waypoint_spacing, args.waypoint_steps, args.arrival_radius
+    )
+    return run(args.checkpoint, args.out, evaluation, waypoint, args.starts)
+
+
+def _antmaze_latent(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.antmaze import EvalConfig
+    from worth_reaching.evaluation.antmaze_latent import run
+    from worth_reaching.models.maze_completion import CompletionConfig
+
+    config = CompletionConfig(
+        seed=args.seed,
+        windows=args.windows,
+        history=args.history,
+        queries=args.queries,
+        codec_updates=args.codec_updates,
+        predictor_updates=args.predictor_updates,
+        flow_updates=args.flow_updates,
+        candidates=args.candidates,
+    )
+    evaluation = EvalConfig(args.eval_split, args.eval_repeats, args.eval_steps)
+    return run(
+        args.dataset,
+        args.data_dir,
+        args.checkpoint,
+        args.out,
+        config,
+        evaluation,
+        args.starts,
+        probe_first_candidates=args.probe_first_candidates,
+    )
+
+
+def _pointmaze_latent(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.pointmaze import run
+    from worth_reaching.models.maze_completion import CompletionConfig
+
+    return run(
+        args.data_dir,
+        args.out,
+        CompletionConfig(
+            seed=args.seed,
+            windows=args.windows,
+            max_horizon=POINTMAZE_TASKS[args.task].action_limit,
+            codec_updates=args.codec_updates,
+            predictor_updates=args.predictor_updates,
+            flow_updates=args.flow_updates,
+        ),
+        task_name=args.task,
+        split=args.eval_split,
+        repeats=args.eval_repeats,
+        limit=args.eval_steps,
+    )
+
+
+def _kuka_latent(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.kuka import run
+    from worth_reaching.models.maze_completion import CompletionConfig
+
+    return run(
+        args.source_dir,
+        args.data_dir,
+        args.out,
+        CompletionConfig(
+            seed=args.seed,
+            windows=args.windows,
+            max_horizon=256,
+            latent_size=24,
+            codec_updates=args.codec_updates,
+            predictor_updates=args.predictor_updates,
+            flow_updates=args.flow_updates,
+        ),
+        split=args.eval_split,
+        repeats=args.eval_repeats,
+        limit=args.eval_steps,
+    )
+
+
+def _scene_latent(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.envs.scene import ACTION_LIMIT
+    from worth_reaching.evaluation.scene import ExecutorConfig, run
+    from worth_reaching.models.maze_completion import CompletionConfig
+
+    return run(
+        args.data_dir,
+        args.out,
+        CompletionConfig(
+            seed=args.seed,
+            windows=args.windows,
+            max_horizon=ACTION_LIMIT,
+            codec_updates=args.codec_updates,
+            predictor_updates=args.predictor_updates,
+            flow_updates=args.flow_updates,
+        ),
+        ExecutorConfig(updates=args.executor_updates),
+        split=args.eval_split,
+        task=args.task,
+        repeats=args.eval_repeats,
+        limit=args.eval_steps,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="wr")
+    parser.add_argument(
+        "--compute-config", type=Path, help="Read device settings before loading JAX"
+    )
+    commands = parser.add_subparsers(required=True)
+    devices = commands.add_parser(
+        "devices", help="Check JAX devices and batch sharding"
+    )
+    devices.add_argument("--batch-size", type=int, default=17)
+    devices.set_defaults(run=_devices, extra="craftax", uses_jax=True)
+    pilot = commands.add_parser("pilot", help="Run the CPU KeyCorridor diagnostic")
+    pilot.add_argument("--config", type=Path, required=True)
+    pilot.add_argument("--out", type=Path, required=True)
+    pilot.set_defaults(run=_run_pilot, extra="minigrid")
+    collection = commands.add_parser(
+        "collect", help="Collect Craftax-Classic trajectories"
+    )
+    collection.add_argument("--config", type=Path, required=True)
+    collection.add_argument("--out", type=Path, required=True)
+    collection.add_argument("--episodes", type=int)
+    collection.add_argument("--budget", type=int)
+    collection.add_argument("--seed-start", type=int)
+    collection.add_argument(
+        "--task", help="Craftax terminal task (default: make_iron_pickaxe)"
+    )
+    collection.add_argument("--expert-checkpoint", type=Path)
+    collection.set_defaults(run=_collect, extra="craftax", uses_jax=True)
+    windows = commands.add_parser(
+        "prepare-windows", help="Export masked windows from a Craftax collection"
+    )
+    windows.add_argument("--collection", type=Path, required=True)
+    windows.add_argument("--out", type=Path, required=True)
+    windows.add_argument("--seed", type=int, default=0)
+    windows.add_argument("--windows-per-episode", type=int, default=8)
+    windows.add_argument("--min-span", type=int, default=1)
+    windows.add_argument("--max-span", type=int)
+    windows.set_defaults(run=_prepare_windows, extra="craftax")
+    training = commands.add_parser(
+        "train-completion", help="Train and compare masked latent predictors"
+    )
+    source = training.add_mutually_exclusive_group(required=True)
+    source.add_argument("--grid", action="store_true", help="Use paired grid routes")
+    source.add_argument("--windows", type=Path, help="Use exported Craftax windows")
+    training.add_argument("--out", type=Path, required=True)
+    training.add_argument("--seed", type=int, default=7)
+    training.add_argument("--encoder-updates", type=int, default=250)
+    training.add_argument("--updates", type=int, default=600)
+    training.add_argument("--history-length", type=int, default=16)
+    training.add_argument("--queries-per-window", type=int, default=16)
+    training.add_argument(
+        "--evaluate-test", action="store_true", help="Score frozen grid test worlds"
+    )
+    training.set_defaults(run=_train_completion, extra="craftax", uses_jax=True)
+    routes = commands.add_parser(
+        "grid-routes",
+        help="Sample latent grid routes and run matched waypoint attempts",
+    )
+    routes.add_argument("--checkpoint", type=Path, required=True)
+    routes.add_argument("--out", type=Path, required=True)
+    routes.add_argument("--seed", type=int, default=7)
+    routes.add_argument("--updates", type=int, default=800)
+    routes.add_argument("--candidates", type=int, default=8)
+    routes.add_argument("--repeats", type=int, default=8)
+    routes.add_argument("--slip-probability", type=float, default=0.15)
+    routes.add_argument("--split", choices=("dev", "test"), default="dev")
+    routes.add_argument(
+        "--layouts", type=int, help="Limit evaluated layouts for a smoke run"
+    )
+    routes.set_defaults(run=_run_grid_routes, extra="craftax", uses_jax=True)
+    feedback = commands.add_parser(
+        "grid-feedback",
+        help="Train from matched waypoint attempts and freeze the reranker",
+    )
+    feedback.add_argument("--checkpoint", type=Path, required=True)
+    feedback.add_argument("--flow-run", type=Path, required=True)
+    feedback.add_argument("--out", type=Path, required=True)
+    feedback.add_argument("--seed", type=int, default=7)
+    feedback.add_argument("--updates", type=int, default=250)
+    feedback.add_argument("--candidates", type=int, default=8)
+    feedback.add_argument("--repeats", type=int, default=8)
+    feedback.add_argument("--passage-slip", type=float, default=0.85)
+    feedback.add_argument("--split", choices=("dev", "test"), default="dev")
+    feedback.add_argument("--layouts", type=int)
+    feedback.set_defaults(run=_run_grid_feedback, extra="craftax", uses_jax=True)
+    antmaze = commands.add_parser(
+        "antmaze-gcbc",
+        help="Train goal-conditioned cloning and score saved AntMaze starts",
+    )
+    antmaze.add_argument("--dataset", default="antmaze-large-navigate-v0")
+    antmaze.add_argument(
+        "--data-dir", type=Path, default=Path("results/datasets/ogbench")
+    )
+    antmaze.add_argument("--out", type=Path, required=True)
+    antmaze.add_argument("--seed", type=int, default=7)
+    antmaze.add_argument("--updates", type=int, default=1000)
+    antmaze.add_argument("--checkpoint-every", type=int, default=1000)
+    antmaze.add_argument("--width", type=int, default=256)
+    antmaze.add_argument("--batch-size", type=int, default=256)
+    antmaze.add_argument("--max-trajectories", type=int)
+    antmaze.add_argument("--max-goal-steps", type=int)
+    antmaze.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    antmaze.add_argument("--eval-repeats", type=int, default=4)
+    antmaze.add_argument("--eval-steps", type=int, default=1000)
+    antmaze.add_argument(
+        "--starts", type=Path, help="Reuse a matching saved AntMaze start bank"
+    )
+    antmaze.add_argument(
+        "--resume", type=Path, help="Continue from a compatible training run"
+    )
+    antmaze.set_defaults(run=_antmaze_gcbc, extra="ogbench", uses_jax=True)
+    waypoints = commands.add_parser(
+        "antmaze-waypoints",
+        help="Compare direct and oracle waypoint execution with frozen GCBC",
+    )
+    waypoints.add_argument("--checkpoint", type=Path, required=True)
+    waypoints.add_argument("--out", type=Path, required=True)
+    waypoints.add_argument(
+        "--starts", type=Path, help="Reuse a matching AntMaze start bank"
+    )
+    waypoints.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    waypoints.add_argument("--eval-repeats", type=int, default=4)
+    waypoints.add_argument("--eval-steps", type=int, default=1000)
+    waypoints.add_argument("--waypoint-spacing", type=int, default=1)
+    waypoints.add_argument("--waypoint-steps", type=int, default=150)
+    waypoints.add_argument("--arrival-radius", type=float, default=1.0)
+    waypoints.set_defaults(run=_antmaze_waypoints, extra="ogbench", uses_jax=True)
+    latent = commands.add_parser(
+        "antmaze-latent",
+        help="Train masked latent completion and execute decoded AntMaze candidates",
+    )
+    latent.add_argument("--dataset", default="antmaze-large-navigate-v0")
+    latent.add_argument(
+        "--data-dir", type=Path, default=Path("results/datasets/ogbench")
+    )
+    latent.add_argument(
+        "--checkpoint", type=Path, required=True, help="Frozen GCBC executor run"
+    )
+    latent.add_argument("--out", type=Path, required=True)
+    latent.add_argument(
+        "--starts", type=Path, help="Reuse a matching AntMaze start bank"
+    )
+    latent.add_argument("--seed", type=int, default=7)
+    latent.add_argument("--windows", type=int, default=16000)
+    latent.add_argument("--history", type=int, default=4)
+    latent.add_argument("--queries", type=int, default=8)
+    latent.add_argument("--candidates", type=int, default=4)
+    latent.add_argument(
+        "--probe-first-candidates",
+        action="store_true",
+        help="Compare each sampled first target under a shared closed-loop continuation",
+    )
+    latent.add_argument("--codec-updates", type=int, default=500)
+    latent.add_argument("--predictor-updates", type=int, default=1200)
+    latent.add_argument("--flow-updates", type=int, default=700)
+    latent.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    latent.add_argument("--eval-repeats", type=int, default=2)
+    latent.add_argument("--eval-steps", type=int, default=1000)
+    latent.set_defaults(run=_antmaze_latent, extra="ogbench", uses_jax=True)
+    pointmaze = commands.add_parser(
+        "pointmaze-latent",
+        help="Train and evaluate latent completion on Maze2D U-Maze, Medium or Large",
+    )
+    pointmaze.add_argument("--task", choices=POINTMAZE_TASKS, default="medium")
+    pointmaze.add_argument(
+        "--data-dir", type=Path, default=Path("results/datasets/minari")
+    )
+    pointmaze.add_argument("--out", type=Path, required=True)
+    pointmaze.add_argument("--seed", type=int, default=7)
+    pointmaze.add_argument("--windows", type=int, default=4000)
+    pointmaze.add_argument("--codec-updates", type=int, default=250)
+    pointmaze.add_argument("--predictor-updates", type=int, default=600)
+    pointmaze.add_argument("--flow-updates", type=int, default=300)
+    pointmaze.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    pointmaze.add_argument("--eval-repeats", type=int, default=6)
+    pointmaze.add_argument(
+        "--eval-steps",
+        type=int,
+        help="Action limit (defaults to the official task limit)",
+    )
+    pointmaze.set_defaults(run=_pointmaze_latent, extra="pointmaze", uses_jax=True)
+    kuka = commands.add_parser(
+        "kuka-latent",
+        help="Train and evaluate latent completion on conditional Kuka stacking",
+    )
+    kuka.add_argument(
+        "--source-dir", type=Path, default=Path("results/external/diffuser-kuka")
+    )
+    kuka.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("results/datasets/diffuser-kuka/kuka_dataset"),
+    )
+    kuka.add_argument("--out", type=Path, required=True)
+    kuka.add_argument("--seed", type=int, default=7)
+    kuka.add_argument("--windows", type=int, default=4000)
+    kuka.add_argument("--codec-updates", type=int, default=250)
+    kuka.add_argument("--predictor-updates", type=int, default=600)
+    kuka.add_argument("--flow-updates", type=int, default=300)
+    kuka.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    kuka.add_argument("--eval-repeats", type=int, default=4)
+    kuka.add_argument("--eval-steps", type=int, default=384)
+    kuka.set_defaults(run=_kuka_latent, extra="stacking", uses_jax=True)
+    scene = commands.add_parser(
+        "scene-latent",
+        help="Train and evaluate latent planning on state-based OGBench Scene",
+    )
+    scene.add_argument(
+        "--data-dir", type=Path, default=Path("results/datasets/ogbench")
+    )
+    scene.add_argument("--out", type=Path, required=True)
+    scene.add_argument("--seed", type=int, default=7)
+    scene.add_argument("--windows", type=int, default=8000)
+    scene.add_argument("--executor-updates", type=int, default=2500)
+    scene.add_argument("--codec-updates", type=int, default=350)
+    scene.add_argument("--predictor-updates", type=int, default=1000)
+    scene.add_argument("--flow-updates", type=int, default=450)
+    scene.add_argument(
+        "--task", type=int, choices=range(1, 6), help="Select one official task"
+    )
+    scene.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    scene.add_argument("--eval-repeats", type=int, default=2)
+    scene.add_argument("--eval-steps", type=int, default=750)
+    scene.set_defaults(run=_scene_latent, extra="ogbench", uses_jax=True)
+    comparison = commands.add_parser(
+        "attempt-compare", help="Fit and compare shared-bank selectors"
+    )
+    for split in ("train", "dev", "test"):
+        comparison.add_argument(f"--{split}", type=Path, required=True)
+    comparison.add_argument("--out", type=Path, required=True)
+    comparison.add_argument("--seed", type=int, default=43301)
+    comparison.set_defaults(run=_attempt_compare, extra="craftax")
+    args = parser.parse_args()
+
+    try:
+        compute = ComputeConfig.load(args.compute_config)
+        compute.apply()
+        if getattr(args, "uses_jax", False):
+            compute.validate_backend()
+        summary = args.run(args)
+    except ModuleNotFoundError as error:
+        if error.name not in {
+            "gymnasium",
+            "minigrid",
+            "craftax",
+            "flax",
+            "jax",
+            "mujoco",
+            "minari",
+            "h5py",
+            "gymnasium_robotics",
+            "pybullet",
+            "numpy",
+            "ogbench",
+            "optax",
+        }:
+            raise
+        parser.error(
+            f"Install experiment dependencies with uv sync --locked --extra {args.extra}"
+        )
+    except (ValueError, OSError) as error:
+        parser.error(str(error))
+    if hasattr(args, "out"):
+        summary = {"run_id": args.out.name, "out": str(args.out), **summary}
+    print(json.dumps(summary))
