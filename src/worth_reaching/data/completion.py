@@ -12,8 +12,6 @@ import numpy as np
 from numpy.typing import NDArray
 
 from worth_reaching.data.artifacts import code_revision, write_json
-from worth_reaching.data.craftax_trajectories import SPLIT_VERSION, load_craftax_archive
-from worth_reaching.envs.craftax import ACTION_NAMES, SURVIVAL_TASK
 
 SCHEMA = "completion_windows_v1"
 CompletionSplit = Literal["train", "dev"]
@@ -127,6 +125,8 @@ class CompletionCorpus:
 
 
 def load_completion_corpus(directory: Path) -> CompletionCorpus:
+    from worth_reaching.envs.craftax import SURVIVAL_TASK
+
     if not (directory / "summary.json").is_file():
         raise ValueError(
             f"Expected a completed trajectory window export at {directory}"
@@ -138,12 +138,12 @@ def load_completion_corpus(directory: Path) -> CompletionCorpus:
 
 
 def _public_arrays(
-    trace: dict, budget: int
+    trace: dict, budget: int, action_names: dict[int, str]
 ) -> tuple[NDArray[np.float32], NDArray[np.int32]]:
     steps = trace["steps"]
     if len(steps) != budget or any(
         type(step["action"]) is not int
-        or step["action"] not in ACTION_NAMES
+        or step["action"] not in action_names
         or step["remaining_actions"] != budget - index
         for index, step in enumerate(steps, start=1)
     ):
@@ -165,6 +165,12 @@ def _public_arrays(
 def prepare_craftax_windows(
     source: Path, out: Path, config: WindowConfig
 ) -> dict[str, object]:
+    from worth_reaching.data.craftax_trajectories import (
+        SPLIT_VERSION,
+        load_craftax_archive,
+    )
+    from worth_reaching.envs.craftax import ACTION_NAMES, SURVIVAL_TASK
+
     archive = load_craftax_archive(source)
     if archive.task != SURVIVAL_TASK:
         raise ValueError(f"Trajectory windows require the {SURVIVAL_TASK} task")
@@ -182,7 +188,7 @@ def prepare_craftax_windows(
             stats["episodes"] += 1
             if trace["outcome"] != "success":
                 continue
-            observations, actions = _public_arrays(trace, budget)
+            observations, actions = _public_arrays(trace, budget, ACTION_NAMES)
             windows = config.sample(spec.world_id, budget)
             stats["successful_episodes"] += 1
             stats["windows"] += len(windows)

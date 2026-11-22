@@ -2255,6 +2255,7 @@ craftax = [
     { name = "craftax" },
     { name = "flax" },
     { name = "jax" },
+    { name = "optax" },
     { name = "orbax-checkpoint" },
 ]
 minigrid = [
@@ -2275,6 +2276,7 @@ requires-dist = [
     { name = "gymnasium", marker = "extra == 'minigrid'", specifier = ">=1.0,<2" },
     { name = "jax", marker = "extra == 'craftax'", specifier = ">=0.4.26,<1" },
     { name = "minigrid", marker = "extra == 'minigrid'", specifier = "==3.2.0" },
+    { name = "optax", marker = "extra == 'craftax'", specifier = ">=0.2,<1" },
     { name = "orbax-checkpoint", marker = "extra == 'craftax'", specifier = ">=0.12,<1" },
 ]
 provides-extras = ["minigrid", "craftax"]

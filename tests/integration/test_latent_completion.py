@@ -1,0 +1,137 @@
+import json
+import subprocess
+
+import pytest
+
+
+def test_grid_evaluation_uses_matched_public_starts_and_masks():
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("flax")
+    from worth_reaching.envs.grid_routes import (
+        BUDGET,
+        GOALS,
+        LAYOUT_COUNTS,
+        STARTS,
+        grid_demonstrations,
+        layout_id,
+    )
+    from worth_reaching.evaluation.completion import score_paired_routes
+
+    datasets = grid_demonstrations(include_test=True)
+    world_ids = [{example.world_id for example in rows} for rows in datasets.values()]
+    assert tuple(map(len, world_ids)) == tuple(
+        count * len(STARTS) for count in LAYOUT_COUNTS
+    )
+    maps = [{layout_id(world_id) for world_id in worlds} for worlds in world_ids]
+    assert tuple(map(len, maps)) == LAYOUT_COUNTS
+    assert len(set.union(*maps)) == sum(LAYOUT_COUNTS)
+
+    rows = datasets["test"]
+    for first, second in zip(rows[::2], rows[1::2], strict=True):
+        assert (
+            first.world_id == second.world_id
+            and first.start_step == second.start_step == 0
+        )
+        assert (first.inputs.goal, second.inputs.goal) == GOALS
+        assert (
+            first.inputs.remaining_actions == second.inputs.remaining_actions == BUDGET
+        )
+        np.testing.assert_array_equal(
+            first.inputs.observations, second.inputs.observations
+        )
+        np.testing.assert_array_equal(first.inputs.actions, second.inputs.actions)
+        np.testing.assert_array_equal(
+            first.inputs.query_steps, second.inputs.query_steps
+        )
+        assert first.inputs.terminal_example is second.inputs.terminal_example is None
+
+    targets = np.stack([example.target.observations for example in rows])
+    valid = np.ones(targets.shape[:2], dtype=bool)
+    layouts = [layout_id(example.world_id) for example in rows[::2]]
+    own = score_paired_routes(targets, targets, valid, layouts)
+    swapped = score_paired_routes(
+        targets.reshape(-1, 2, *targets.shape[1:])[:, ::-1].reshape(targets.shape),
+        targets,
+        valid,
+        layouts,
+    )
+    assert 0 < own["worlds"] < len(layouts)
+    assert own["worlds"] == swapped["worlds"]
+    assert own["layouts"] == LAYOUT_COUNTS[-1]
+    assert own["matched_route_win_rate"] == own["exact_cell_rate"] == 1.0
+    assert (
+        own["matched_route_error_cells"] == swapped["swapped_route_error_cells"] == 0.0
+    )
+    assert swapped["matched_route_win_rate"] == 0.0
+
+    # Once a route reaches its destination the demonstration stays there.
+    positions = targets[..., :2]
+    finished = (positions == positions[:, -1:, :]).all(axis=-1)
+    either_finished = finished[::2] | finished[1::2]
+    perturbed = targets.copy()
+    perturbed[np.repeat(either_finished, 2, axis=0)] = -1
+    assert score_paired_routes(perturbed, targets, valid, layouts) == own
+
+
+def test_training_cli_saves_public_input_predictors(tmp_path):
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("flax")
+    from flax import serialization
+
+    from worth_reaching.envs.grid_routes import grid_demonstrations
+    from worth_reaching.models.completion import (
+        LatentPredictor,
+        ModelSpec,
+        ObservationCodec,
+        TrainingConfig,
+        pack_inputs,
+        predict,
+    )
+
+    out = tmp_path / "model"
+    result = subprocess.run(
+        [
+            "wr",
+            "train-completion",
+            "--grid",
+            "--out",
+            out,
+            "--encoder-updates",
+            "2",
+            "--updates",
+            "2",
+            "--history-length",
+            "4",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    assert json.loads(result.stdout)["evaluation"] == summary["evaluation"]
+    assert set(summary["evaluation"]) == {"dev"}
+    assert summary["evaluation"]["dev"]["target_variance"] > 0
+    assert summary["evaluation"]["dev"]["goal_blind"]["matched_route_win_rate"] == 0.5
+
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    spec_data = manifest["model"]
+    spec_data["goals"] = tuple(spec_data["goals"])
+    spec = ModelSpec(**spec_data)
+    config = TrainingConfig(**manifest["config"])
+    codec = ObservationCodec(config.width, config.latent_size, spec.observation_size)
+    predictor = LatentPredictor(spec, config.width, config.latent_size)
+    weights = serialization.msgpack_restore((out / "weights.msgpack").read_bytes())
+    source = grid_demonstrations()
+    recent = max(source["train"], key=lambda window: window.start_step).inputs
+    packed = pack_inputs([recent], spec, config)
+    np.testing.assert_array_equal(packed.observations[0], recent.observations[-4:])
+    np.testing.assert_array_equal(packed.actions[0], recent.actions[-4:])
+
+    public = pack_inputs(
+        [example.inputs for example in source["dev"][:2]], spec, config
+    )
+    latent, decoded = predict(
+        codec, predictor, weights["codec"], weights["goal_blind"], public.without_goal()
+    )
+    assert latent.shape == (2, spec.budget - 1, config.latent_size)
+    np.testing.assert_array_equal(decoded[0], decoded[1])

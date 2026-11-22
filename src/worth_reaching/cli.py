@@ -44,6 +44,22 @@ def _prepare_windows(args: argparse.Namespace) -> dict[str, object]:
     return prepare_craftax_windows(args.collection, args.out, config)
 
 
+def _train_completion(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.completion import run_completion_training
+    from worth_reaching.models.completion import TrainingConfig
+
+    config = TrainingConfig(
+        seed=args.seed,
+        encoder_updates=args.encoder_updates,
+        updates=args.updates,
+        history_length=args.history_length,
+        queries_per_window=args.queries_per_window,
+    )
+    return run_completion_training(
+        args.out, config, source=args.windows, evaluate_test=args.evaluate_test
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="wr")
     commands = parser.add_subparsers(required=True)
@@ -74,6 +90,22 @@ def main() -> None:
     windows.add_argument("--min-span", type=int, default=1)
     windows.add_argument("--max-span", type=int)
     windows.set_defaults(run=_prepare_windows, extra="craftax")
+    training = commands.add_parser(
+        "train-completion", help="Train and compare masked latent predictors"
+    )
+    source = training.add_mutually_exclusive_group(required=True)
+    source.add_argument("--grid", action="store_true", help="Use paired grid routes")
+    source.add_argument("--windows", type=Path, help="Use exported Craftax windows")
+    training.add_argument("--out", type=Path, required=True)
+    training.add_argument("--seed", type=int, default=7)
+    training.add_argument("--encoder-updates", type=int, default=250)
+    training.add_argument("--updates", type=int, default=600)
+    training.add_argument("--history-length", type=int, default=16)
+    training.add_argument("--queries-per-window", type=int, default=16)
+    training.add_argument(
+        "--evaluate-test", action="store_true", help="Score frozen grid test worlds"
+    )
+    training.set_defaults(run=_train_completion, extra="craftax")
     comparison = commands.add_parser(
         "attempt-compare", help="Fit and compare shared-bank selectors"
     )
@@ -87,7 +119,15 @@ def main() -> None:
     try:
         summary = args.run(args)
     except ModuleNotFoundError as error:
-        if error.name not in {"gymnasium", "minigrid", "craftax", "jax", "numpy"}:
+        if error.name not in {
+            "gymnasium",
+            "minigrid",
+            "craftax",
+            "flax",
+            "jax",
+            "numpy",
+            "optax",
+        }:
             raise
         parser.error(
             f"Install experiment dependencies with uv sync --locked --extra {args.extra}"

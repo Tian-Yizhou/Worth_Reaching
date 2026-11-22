@@ -10,7 +10,7 @@ The planned comparison evaluates generated routes against direct execution and r
 
 ## Quick start
 
-Use Python 3.12 or newer and run the commands below from the repository root. Both examples run on CPU. [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
+Use Python 3.12 or newer and run the commands below from the repository root. The examples run on CPU. [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
 
 ### Run the KeyCorridor pilot
 
@@ -46,6 +46,17 @@ Point the command at a completed craft-and-survive collection with successful de
 collection=results/datasets/your-craft-and-survive-collection
 out="$(mktemp -d results/completion.XXXXXX)/windows"
 uv run --no-sync wr prepare-windows --collection "$collection" --out "$out" --seed 7
+```
+
+### Train and compare latent predictors
+
+The grid diagnostic generates matched demonstrations for two terminal goals. At evaluation both predictions use the same map, starting observation and action budget. [Training and goal switch protocol](docs/experiments.md#train-and-test-latent-trajectory-completion)
+
+```bash
+uv sync --locked --group dev --extra craftax
+mkdir -p results
+run_dir="$(mktemp -d results/grid-completion.XXXXXX)"
+JAX_PLATFORMS=cpu uv run --no-sync wr train-completion --grid --out "$run_dir/model"
 ```
 
 ### Longer server runs

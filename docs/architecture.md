@@ -20,9 +20,10 @@ The `src/worth_reaching/` package groups code by responsibility.
 | --- | --- |
 | `envs/` | Versioned simulator adaptations and terminal task rules |
 | `data/` | Collect complete public trajectories, validate world splits and export masked training and development windows |
+| `models/` | Encode observations, train a public-history predictor and complete masked latent positions |
 | `policies/` | Recurrent expert inference from public observations |
-| `evaluation/` | Replay, matched continuations and comparisons of shared candidate banks |
-| `cli.py` | Connect configurations to `pilot`, `collect`, `prepare-windows` and `attempt-compare` |
+| `evaluation/` | Replay, matched continuations, shared-bank comparisons and paired route scoring |
+| `cli.py` | Connect configurations to collection, window export, training and evaluation |
 
 The trajectory completion model will use public data from `data/`. Its executor will consume public observations and emit primitive actions. Evaluation owns simulator snapshots and restores them for matched repeats. [Trajectory completion design](trajectory-completion.md)
 
@@ -55,6 +56,12 @@ Random and PPO-RNN collection share the same environment and transition seed str
 For a successful craft-and-survive episode with budget `B`, index observations from `o[0]` and let action `a[t]` produce `o[t]`. A window starts at an observed step `s` and queries the next `L` positions, with `s + L < B`. The input contains observations through `o[s]`, actions through `a[s]`, the terminal task and the remaining budget `B - s`. The target contains observations and incoming actions for steps `s + 1` through `s + L`. The query offsets `1..L` describe which positions to predict. They do not depend on when the pickaxe was crafted.
 
 Each successful episode contributes a window from the reset and up to seven later starts by default. The seed and world ID determine the sampled starts and lengths. Each export inherits the archive's world split. Train and development exports use terminal outcomes to select demonstrations. Model inputs contain the public task descriptor. The training shard can additionally supply `o[B]` through an explicit endpoint-example option. Development windows use the task descriptor alone. The final action is outside the windows, and the test split stays in the source archive for evaluation. [Window export and loader](experiments.md#prepare-masked-trajectory-windows)
+
+## Latent predictor
+
+The first trainer learns an observation autoencoder on masked training observations and freezes its encoder and decoder. Both predictors use that same target representation, initial predictor weights and sampled batches. A GRU summarizes public observations and their incoming actions. The predictor receives that history representation, the time remaining and the requested time offsets. The goal-conditioned arm also receives the public task identifier. It is trained to predict the encoded observation at each requested position.
+
+The trainer pads the recent history and uses evenly spaced queries across longer masks to bound batch size. Only the public-input packer feeds prediction. Target observations are encoded separately for training and metrics. The decoder translates predictions into observation space for diagnostics. The model saves inference weights, architecture and training settings. [Training and goal switch protocol](experiments.md#train-and-test-latent-trajectory-completion)
 
 ## Shared-attempt evaluation contract
 

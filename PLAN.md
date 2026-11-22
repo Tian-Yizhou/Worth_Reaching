@@ -12,6 +12,8 @@ Learn to complete missing segments of a trajectory in latent space. At deploymen
 
 Milestone 1 exports Craftax windows through `wr prepare-windows`. Its output supplies the public inputs and masked targets for milestone 2. [Window export and loader](docs/experiments.md#prepare-masked-trajectory-windows)
 
+Milestone 2 has a masked latent predictor and a paired grid diagnostic. The diagnostic switches the goal at a common start, scores the predicted intermediate route, and compares a predictor trained with the goal against a predictor trained with history and time alone. The same trainer accepts the single-goal Craftax windows. [Training and goal switch protocol](docs/experiments.md#train-and-test-latent-trajectory-completion)
+
 ## Evaluation protocol
 
 Keep exploratory development worlds separate from test worlds. Freeze decision rules before the final comparison. Compare methods on matched starts and independent repeat streams. When isolating proposal quality, share the executor, terminal objective and candidate budget. Record all environment interactions used for training, proposal updates and evaluation. [Architecture](docs/architecture.md) · [Running experiments](docs/experiments.md)
