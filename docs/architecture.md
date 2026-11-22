@@ -93,6 +93,10 @@ The learned PointMaze and AntMaze planners share the masked window sampler, comp
 
 The Kuka adapter runs the pinned upstream PyBullet simulator with headless Gymnasium compatibility. Its planner uses the public 39-coordinate state, a terminal block-position condition with free horizontal translation, and time. The demonstration files contain states, so the shared masked completion model uses observation history alone. The executor tracks decoded arm joint targets and attachment requests using the author's motor-control and grasp interface. The evaluator keeps access to simulator contacts and supplies the same seeded start and block order to each arm. [Conditional stacking protocol](experiments.md#run-conditional-kuka-stacking)
 
+## OGBench Scene benchmark
+
+Scene shares the OGBench state archive loader, continuous goal-conditioned cloning model, masked completion and receding-goal planner. The loader reads the official 40-feature observation, five-dimensional action and episode marker. The evaluator seeds a persistent action space because OGBench samples actions while constructing the goal observation. It regenerates the exact public start and goal and verifies MuJoCo integration state before the second arm. Simulator integration state and native success events stay inside evaluation. [Scene protocol](experiments.md#run-state-based-ogbench-scene)
+
 ## Shared-attempt evaluation contract
 
 The shared-attempt comparison fits its scoring heads on training starts and selects the reachability threshold on development starts. Each external simulator can export a `shared_attempts_v1` bank with disjoint root `world_id`s, fixed public features, a `direct` arm, and ordered matched trials for each candidate. An optional `native_choice` identifies the native selector's choice from the same bank. `public_bank` projects each record to the selection input. Selection uses only these projected fields. The evaluator uses the held-out arrival and terminal labels to score the frozen choices.

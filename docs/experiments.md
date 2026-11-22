@@ -14,6 +14,7 @@ Use Python 3.12 or newer and run from the repository root. The [quick start](../
 | `results/antmaze-waypoints.*/` | Paired direct and oracle waypoint execution outcomes |
 | `results/pointmaze-diffuser.*/` | PointMaze archive splits, decoded plans, executed trajectories and paired outcomes |
 | `results/diffuser-kuka.pilot.*/` | Conditional stacking clip splits, decoded plans, executed states and tower scores |
+| `results/ogbench-scene.*/` | Frozen Scene executor and completion weights, matched starts, decoded plans and rollout outcomes |
 | `results/benchmark-suite.*/` | Per-task development runs and logs from the overnight launcher |
 | `results/checkpoints/` | Policy and model weights |
 | `results/external/` | Isolated benchmark source trees and environments |
@@ -233,3 +234,19 @@ The setup script pins the author's `kuka` branch, applies a compatibility patch 
 Both arms use the same reset, complete terminal order and executor. One follows the decoded forecast and the other follows the first sampled route, taking the earliest queried state and replanning at its time offset. Each control cycle uses ten PyBullet simulation steps. The evaluator uses 384 control cycles, the author's three 128-step planning chunks. At the deadline all three adjacent pairs must be in the requested order, in physical contact, and released from the gripper. The upstream conditional placement score is logged separately. `--eval-split test` selects disjoint reset seeds. [Author conditional evaluator](https://github.com/jannerm/diffuser/blob/kuka/scripts/conditional_kuka_planning_eval.py)
 
 The run records `manifest.json`, the clip split and hashes, latent and decoded plans, public trajectories, and both terminal metrics. The two arms measure the effect of proposal sampling within the shared latent planner. The author's released Diffuser checkpoint can supply a future same-environment comparison.
+
+## Run state-based OGBench Scene
+
+Install the locked `ogbench` extra and include `--extra cuda12` for CUDA training. With the default compute configuration, `wr devices` reports the selected backend and all visible GPUs. The Scene executor and completion model both use the same JAX data-parallel training path. Evaluation steps the MuJoCo environment on the host. [Compute configuration](#compute-devices)
+
+```bash
+uv run --no-sync python -c 'import ogbench; ogbench.download_datasets(["scene-play-v0"], dataset_dir="results/datasets/ogbench")'
+run_dir="$(mktemp -d results/ogbench-scene.XXXXXX)"
+uv run --no-sync wr scene-latent --out "$run_dir/state" --eval-repeats 1
+```
+
+`scene-v0` supplies a 40-feature public state, five continuous action coordinates and five goal configurations involving the cube, drawer, window and locks. Both arms reuse exactly the same seeded start and goal. Each rollout stops on the official success event or the 750-action limit. Use `--task 4` to isolate the cube-in-drawer task, `--eval-steps` to shorten a smoke test, and `--eval-split test` after fixing the experiment recipe. [OGBench Scene](https://seohong.me/projects/ogbench/#scene) · [Dataset and task protocol](https://github.com/seohongpark/ogbench)
+
+Executor training alternates hindsight-goal batches capped at 64 transitions and batches that sample any later observation in the same training episode. Both arms use that actor after training. The direct arm tracks the terminal observation. The latent arm takes the earliest state of the first sampled decoded route and replans when its time offset elapses. The official input features and action history feed the planner. Extra archive fields for MuJoCo state and buttons are outside the training loader.
+
+The manifest identifies the official train and validation archives by checksum. Offline validation reports action MSE and normalized reconstruction and prediction MSE. The other artifacts contain exact starts, public trajectories with executed actions, sampled plans, weights and paired success by task.

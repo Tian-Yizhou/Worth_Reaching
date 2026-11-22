@@ -26,6 +26,8 @@ Milestone 5 starts with state AntMaze-Large. `wr antmaze-gcbc` reads the officia
 
 `wr kuka-latent` uses Diffuser's released manipulation clips and Kuka simulator to test complete four-block orders. The pilot compares tracking decoded forecasts and sampled trajectories from matched starts and scores the physical tower at the action limit. [Conditional stacking protocol](docs/experiments.md#run-conditional-kuka-stacking)
 
+`wr scene-latent` pairs direct goal tracking and decoded intermediate targets with one learned executor across the five state-based OGBench Scene tasks. This establishes the state-observation comparison for a later visual experiment. [Scene protocol](docs/experiments.md#run-state-based-ogbench-scene)
+
 ## Evaluation protocol
 
 Keep exploratory development worlds separate from test worlds. Freeze decision rules before the final comparison. Compare methods on matched starts and independent repeat streams. When isolating proposal quality, share the executor, terminal objective and candidate budget. Record all environment interactions used for training, proposal updates and evaluation. [Architecture](docs/architecture.md) · [Running experiments](docs/experiments.md)

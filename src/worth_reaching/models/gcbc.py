@@ -21,21 +21,32 @@ CHECKPOINT_SCHEMA = "antmaze_gcbc_v1"
 
 class GCBC(nn.Module):
     width: int
+    action_size: int = ACTION_SIZE
+    relative_coordinates: int = 2
 
     @nn.compact
     def __call__(self, observation: jax.Array, goal: jax.Array) -> jax.Array:
-        # Keep the relative displacement explicit for the state-based executor.
+        leading = self.relative_coordinates
         hidden = jnp.concatenate(
-            (observation, goal, goal[..., :2] - observation[..., :2]), axis=-1
+            (observation, goal, goal[..., :leading] - observation[..., :leading]),
+            axis=-1,
         )
         for _ in range(3):
             hidden = nn.gelu(nn.Dense(self.width)(hidden))
-        return nn.Dense(ACTION_SIZE)(hidden)
+        return nn.Dense(self.action_size)(hidden)
 
 
-def initialize(width: int, seed: int, learning_rate: float) -> tuple[GCBC, TrainState]:
-    model = GCBC(width)
-    observation = jnp.zeros((1, OBSERVATION_SIZE))
+def initialize(
+    width: int,
+    seed: int,
+    learning_rate: float,
+    *,
+    observation_size: int = OBSERVATION_SIZE,
+    action_size: int = ACTION_SIZE,
+    relative_coordinates: int = 2,
+) -> tuple[GCBC, TrainState]:
+    model = GCBC(width, action_size, relative_coordinates)
+    observation = jnp.zeros((1, observation_size))
     return model, TrainState.create(
         apply_fn=model.apply,
         params=model.init(jax.random.key(seed), observation, observation),
@@ -92,6 +103,12 @@ def load_policy(directory: Path) -> Callable[[np.ndarray, np.ndarray], np.ndarra
     ):
         raise ValueError("Invalid GCBC normalization")
 
+    return policy_from_weights(model, weights, mean, scale)
+
+
+def policy_from_weights(
+    model: GCBC, weights: dict, mean: np.ndarray, scale: np.ndarray
+) -> Callable[[np.ndarray, np.ndarray], np.ndarray]:
     def act(observation: np.ndarray, goal: np.ndarray) -> np.ndarray:
         return np.asarray(predict(model, weights, observation, goal, mean, scale))
 

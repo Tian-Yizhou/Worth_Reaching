@@ -207,6 +207,30 @@ def _kuka_latent(args: argparse.Namespace) -> dict[str, object]:
     )
 
 
+def _scene_latent(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.envs.scene import ACTION_LIMIT
+    from worth_reaching.evaluation.scene import ExecutorConfig, run
+    from worth_reaching.models.maze_completion import CompletionConfig
+
+    return run(
+        args.data_dir,
+        args.out,
+        CompletionConfig(
+            seed=args.seed,
+            windows=args.windows,
+            max_horizon=ACTION_LIMIT,
+            codec_updates=args.codec_updates,
+            predictor_updates=args.predictor_updates,
+            flow_updates=args.flow_updates,
+        ),
+        ExecutorConfig(updates=args.executor_updates),
+        split=args.eval_split,
+        task=args.task,
+        repeats=args.eval_repeats,
+        limit=args.eval_steps,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="wr")
     parser.add_argument(
@@ -410,6 +434,27 @@ def main() -> None:
     kuka.add_argument("--eval-repeats", type=int, default=4)
     kuka.add_argument("--eval-steps", type=int, default=384)
     kuka.set_defaults(run=_kuka_latent, extra="stacking", uses_jax=True)
+    scene = commands.add_parser(
+        "scene-latent",
+        help="Train and evaluate latent planning on state-based OGBench Scene",
+    )
+    scene.add_argument(
+        "--data-dir", type=Path, default=Path("results/datasets/ogbench")
+    )
+    scene.add_argument("--out", type=Path, required=True)
+    scene.add_argument("--seed", type=int, default=7)
+    scene.add_argument("--windows", type=int, default=8000)
+    scene.add_argument("--executor-updates", type=int, default=2500)
+    scene.add_argument("--codec-updates", type=int, default=350)
+    scene.add_argument("--predictor-updates", type=int, default=1000)
+    scene.add_argument("--flow-updates", type=int, default=450)
+    scene.add_argument(
+        "--task", type=int, choices=range(1, 6), help="Select one official task"
+    )
+    scene.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    scene.add_argument("--eval-repeats", type=int, default=2)
+    scene.add_argument("--eval-steps", type=int, default=750)
+    scene.set_defaults(run=_scene_latent, extra="ogbench", uses_jax=True)
     comparison = commands.add_parser(
         "attempt-compare", help="Fit and compare shared-bank selectors"
     )

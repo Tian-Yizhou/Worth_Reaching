@@ -130,6 +130,16 @@ run_dir="$(mktemp -d results/diffuser-kuka.pilot.XXXXXX)"
 uv run --no-sync wr kuka-latent --out "$run_dir/conditional"
 ```
 
+### Run state-based OGBench Scene
+
+Use the official Scene play archives to train a shared executor and compare direct and latent planning from the five official goals. [Data setup and scoring protocol](docs/experiments.md#run-state-based-ogbench-scene)
+
+```bash
+uv run --no-sync python -c 'import ogbench; ogbench.download_datasets(["scene-play-v0"], dataset_dir="results/datasets/ogbench")'
+run_dir="$(mktemp -d results/ogbench-scene.XXXXXX)"
+uv run --no-sync wr scene-latent --out "$run_dir/state" --eval-repeats 1
+```
+
 ## Contributing
 
 Choose a focused change from the implementation plan and include a reproducible check. Install the environment extras for the full CPU test suite. [Contribution guide](CONTRIBUTING.md) · [Implementation plan](PLAN.md)
