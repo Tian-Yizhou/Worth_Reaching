@@ -16,6 +16,33 @@ Use Python 3.12 or newer and run from the repository root. The [quick start](../
 
 Use a new output directory for each run. Keep long collection and training runs in tmux.
 
+## Compute devices
+
+On supported NVIDIA Linux machines, install the locked CUDA 12 extra with the environment extras you need. On CPU machines, omit `--extra cuda12` from the same install command. Use `uv run --no-sync` after installation to reuse the selected extras. [JAX CUDA installation](https://docs.jax.dev/en/latest/installation.html#nvidia-gpu)
+
+```bash
+uv sync --locked --group dev --extra minigrid --extra craftax --extra ogbench --extra cuda12
+uv run --no-sync wr devices
+```
+
+The defaults in `configs/compute.toml` use `platform = "auto"` and `gpus = "all"`. JAX uses all visible GPUs when CUDA is available and falls back to CPU on CPU-only hosts. Explicit GPU selections report an error if the requested devices are unavailable. Use `platform = "cpu"` for a CPU run.
+
+Copy the configuration to `local-file/compute.toml` for a machine-specific override. An explicit `--compute-config` takes precedence over `WR_COMPUTE_CONFIG`, which takes precedence over the repository default. For a two-GPU run, a local file can contain:
+
+```toml
+[compute]
+platform = "gpu"
+gpus = [0, 2]
+```
+
+```bash
+uv run --no-sync wr --compute-config local-file/compute.toml devices
+```
+
+Indices are zero-based within any existing `CUDA_VISIBLE_DEVICES` list. The configuration never expands that list. With no launcher mask, the default CUDA ordering is PCI bus order. CUDA renumbers the selected devices inside the process, and the report includes the effective visibility mask. Add the same global flag before any experiment command, or export `WR_COMPUTE_CONFIG` for a tmux session. The `devices` command runs a sharded reduction and reports the rows placed on each device.
+
+The completion predictor, route flow, feedback update and AntMaze GCBC trainer use JAX data parallelism on a single host. Batch size is global, so the same update uses the same number of training examples on one, two or more devices. Run manifests record the detected backend, device count and visibility mask. Simulator rollout loops execute serially. [JAX automatic parallelization](https://docs.jax.dev/en/latest/parallel.html)
+
 ## Collect Craftax trajectories
 
 Use `make_iron_pickaxe_and_survive` for trajectory completion. The agent must craft the iron pickaxe by the deadline and live through the last action. The `make_iron_pickaxe` option scores the first craft and remains available for reading or collecting earlier task variants. [Collection contract](architecture.md#craftax-collection-contract)
@@ -23,7 +50,6 @@ Use `make_iron_pickaxe_and_survive` for trajectory completion. The agent must cr
 The following commands start matching expert and random collections with the same world seeds and step budget. The published PPO-RNN checkpoint supplies the expert actions.
 
 ```bash
-uv sync --locked --group dev --extra craftax
 python3 scripts/fetch_craftax_expert.py
 
 tmux new-session -d -s wr-craftax-expert -c "$PWD" \
@@ -104,10 +130,9 @@ The summary reports terminal success, arrival, success after a missed target and
 
 ## Train the AntMaze GCBC baseline
 
-Install the locked OGBench extra. The following command downloads the state-based train and validation archives when they are absent. [OGBench dataset API](https://github.com/seohongpark/ogbench#dataset-apis)
+Install the locked OGBench extra using the compute setup above. The following command downloads the state-based train and validation archives when they are absent. [OGBench dataset API](https://github.com/seohongpark/ogbench#dataset-apis)
 
 ```bash
-uv sync --locked --group dev --extra ogbench
 uv run --no-sync python -c 'import ogbench; ogbench.download_datasets(["antmaze-large-navigate-v0", "antmaze-large-stitch-v0"], dataset_dir="results/datasets/ogbench")'
 ```
 
@@ -115,9 +140,9 @@ uv run --no-sync python -c 'import ogbench; ogbench.download_datasets(["antmaze-
 
 ```bash
 run_dir="$(mktemp -d results/antmaze-gcbc.XXXXXX)"
-JAX_PLATFORMS=cpu uv run --no-sync wr antmaze-gcbc \
+uv run --no-sync wr antmaze-gcbc \
   --dataset antmaze-large-navigate-v0 --updates 2000 --width 128 --out "$run_dir/navigate"
-JAX_PLATFORMS=cpu uv run --no-sync wr antmaze-gcbc \
+uv run --no-sync wr antmaze-gcbc \
   --dataset antmaze-large-stitch-v0 --updates 2000 --width 128 \
   --starts "$run_dir/navigate/starts.npz" --out "$run_dir/stitch"
 ```

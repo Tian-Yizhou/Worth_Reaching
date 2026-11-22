@@ -15,6 +15,7 @@ from worth_reaching.data.completion import CompletionInput
 from worth_reaching.envs import grid_routes as grid
 from worth_reaching.models import route_flow
 from worth_reaching.models.completion import ModelSpec, pack_inputs
+from worth_reaching.models.parallel import describe
 
 DEMONSTRATION_SEED = 8112
 FAR_ROUTE_RATE = 0.25
@@ -430,6 +431,7 @@ def run(checkpoint: Path, out: Path, config: ExecutionConfig) -> dict[str, objec
         out / "manifest.json",
         {
             "schema": "grid_latent_route_attempts_v1",
+            "compute": describe(),
             "config": asdict(config),
             "code_revision": code_revision(),
             "checkpoint": str(checkpoint.resolve()),

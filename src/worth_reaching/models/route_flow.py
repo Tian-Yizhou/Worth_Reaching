@@ -21,6 +21,12 @@ from worth_reaching.models.completion import (
     TrainingConfig,
     encode_observations,
 )
+from worth_reaching.models.parallel import (
+    mean_squared,
+    replicate,
+    shard_batch,
+    single_device,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +98,11 @@ def route_conditions(inputs: PackedInput, forecast: jax.Array, goals: int) -> ja
 
 @jax.jit
 def _update(
-    state: TrainState, target: jax.Array, condition: jax.Array, key: jax.Array
+    state: TrainState,
+    target: jax.Array,
+    condition: jax.Array,
+    key: jax.Array,
+    valid: jax.Array | None,
 ) -> TrainState:
     noise_key, time_key = jax.random.split(key)
     noise = jax.random.normal(noise_key, target.shape)
@@ -101,7 +111,7 @@ def _update(
 
     def loss(params):
         prediction = state.apply_fn(params, current, time, condition)
-        return jnp.square(prediction - (target - noise)).mean()
+        return mean_squared(prediction - (target - noise), valid)
 
     return state.apply_gradients(grads=jax.grad(loss)(state.params))
 
@@ -122,16 +132,15 @@ def fit(
         params=model.init(key, normalized[:1], jnp.zeros((1, 1)), condition[:1]),
         tx=optax.adam(0.001),
     )
+    state, key = replicate((state, key))
     rng = np.random.default_rng([seed, 1])
     for index in range(updates):
         batch = rng.integers(len(residual), size=64)
+        (target, context), valid = shard_batch((normalized[batch], condition[batch]))
         state = _update(
-            state,
-            normalized[batch],
-            condition[batch],
-            jax.random.fold_in(key, index + 1),
+            state, target, context, jax.random.fold_in(key, index + 1), valid
         )
-    return model, state.params, scale
+    return model, single_device(state.params), scale
 
 
 @jax.jit
@@ -141,6 +150,7 @@ def _refine_step(
     attempts: tuple[jax.Array, jax.Array, jax.Array],
     key: jax.Array,
     strength: float,
+    valid: jax.Array | None,
 ) -> TrainState:
     def path(target: jax.Array, key: jax.Array, mask: jax.Array | float):
         noise_key, time_key = jax.random.split(key)
@@ -152,6 +162,8 @@ def _refine_step(
     demo_key, attempt_key = jax.random.split(key)
     demo_context, demo_target = demonstrations
     context, target, mask = attempts
+    if valid is not None:
+        mask = jnp.where(valid[:, None], mask, 0)
     demo_latent, demo_time, demo_velocity = path(demo_target, demo_key, 1.0)
     latent, time, velocity = path(target, attempt_key, mask)
 
@@ -163,7 +175,7 @@ def _refine_step(
         feedback_loss = jnp.sum(jnp.square(attempt_error) * mask) / jnp.maximum(
             jnp.sum(mask), 1
         )
-        return jnp.square(demo_error).mean() + strength * feedback_loss
+        return mean_squared(demo_error, valid) + strength * feedback_loss
 
     return state.apply_gradients(grads=jax.grad(loss)(state.params))
 
@@ -185,10 +197,10 @@ def refine(
     initial = TrainState.create(
         apply_fn=model.apply, params=weights, tx=optax.adam(0.0003)
     )
-    demonstration_only = with_feedback = initial
+    demonstration_only = with_feedback = replicate(initial)
     demo_rng = np.random.default_rng([seed, 82])
     feedback_rng = np.random.default_rng([seed, 83])
-    key = jax.random.key(seed)
+    key = replicate(jax.random.key(seed))
     for step in range(updates):
         rows = demo_rng.integers(len(demonstration_targets), size=64)
         labels = feedback_rng.choice(len(attempt_targets), size=64, p=sampling_weights)
@@ -198,14 +210,15 @@ def refine(
             attempt_targets[labels],
             credit_mask[labels],
         )
+        (demonstrations, attempts), valid = shard_batch((demonstrations, attempts))
         step_key = jax.random.fold_in(key, step)
         demonstration_only = _refine_step(
-            demonstration_only, demonstrations, attempts, step_key, 0.0
+            demonstration_only, demonstrations, attempts, step_key, 0.0, valid
         )
         with_feedback = _refine_step(
-            with_feedback, demonstrations, attempts, step_key, 1.0
+            with_feedback, demonstrations, attempts, step_key, 1.0, valid
         )
-    return demonstration_only.params, with_feedback.params
+    return single_device((demonstration_only.params, with_feedback.params))
 
 
 @partial(jax.jit, static_argnames=("model", "candidates", "steps"))

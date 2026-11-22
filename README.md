@@ -10,12 +10,18 @@ The planned comparison evaluates generated routes against direct execution and r
 
 ## Quick start
 
-Use Python 3.12 or newer and run the commands below from the repository root. The examples run on CPU. [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
+Use Python 3.12 or newer and run the commands below from the repository root. Install the environment extras for the experiments you plan to run. On an NVIDIA Linux server, include `--extra cuda12` to enable GPU training. [Install uv](https://docs.astral.sh/uv/getting-started/installation/) · [Compute configuration](docs/experiments.md#compute-devices)
+
+```bash
+uv sync --locked --group dev --extra minigrid --extra craftax --extra ogbench --extra cuda12
+uv run --no-sync wr devices
+```
+
+JAX automatically uses the available backend. Training uses every visible device by default. Edit a local copy of `configs/compute.toml` to select devices and pass it with `wr --compute-config PATH`.
 
 ### Run the KeyCorridor pilot
 
 ```bash
-uv sync --locked --group dev --extra minigrid
 mkdir -p results
 run_dir="$(mktemp -d results/minigrid-smoke.XXXXXX)/keycorridor"
 uv run --no-sync wr pilot --config configs/minigrid/keycorridor.toml --out "$run_dir"
@@ -27,10 +33,9 @@ The pilot replays one starting history and applies two different actions before 
 ### Collect Craftax-Classic trajectories
 
 ```bash
-uv sync --locked --group dev --extra minigrid --extra craftax
 mkdir -p results
 run_dir="$(mktemp -d results/craftax-smoke.XXXXXX)/craftax"
-JAX_PLATFORMS=cpu uv run --no-sync wr collect \
+uv run --no-sync wr collect \
   --config configs/craftax/iron_pickaxe.toml \
   --task make_iron_pickaxe_and_survive --out "$run_dir"
 cat "$run_dir/summary.json"
@@ -53,10 +58,9 @@ uv run --no-sync wr prepare-windows --collection "$collection" --out "$out" --se
 The grid diagnostic generates matched demonstrations for two terminal goals. At evaluation both predictions use the same map, starting observation and action budget. [Training and goal switch protocol](docs/experiments.md#train-and-test-latent-trajectory-completion)
 
 ```bash
-uv sync --locked --group dev --extra craftax
 mkdir -p results
 run_dir="$(mktemp -d results/grid-completion.XXXXXX)"
-JAX_PLATFORMS=cpu uv run --no-sync wr train-completion --grid --out "$run_dir/model"
+uv run --no-sync wr train-completion --grid --out "$run_dir/model"
 ```
 
 ### Execute sampled latent routes
@@ -64,7 +68,7 @@ JAX_PLATFORMS=cpu uv run --no-sync wr train-completion --grid --out "$run_dir/mo
 Use the grid checkpoint from the previous command as the frozen predictor. A conditional flow samples several routes from the same reset and tests their waypoints under matched disturbances. [Route generation and execution protocol](docs/experiments.md#sample-and-execute-alternative-routes)
 
 ```bash
-JAX_PLATFORMS=cpu uv run --no-sync wr grid-routes \
+uv run --no-sync wr grid-routes \
   --checkpoint "$run_dir/model" --out "$run_dir/routes" --layouts 2
 ```
 
@@ -73,7 +77,7 @@ JAX_PLATFORMS=cpu uv run --no-sync wr grid-routes \
 Use the checkpoint and sampled flow from the preceding commands. This diagnostic learns from matched attempts on training layouts and compares generators with one fixed reranker. [Feedback protocol](docs/experiments.md#train-from-execution-feedback)
 
 ```bash
-JAX_PLATFORMS=cpu uv run --no-sync wr grid-feedback \
+uv run --no-sync wr grid-feedback \
   --checkpoint "$run_dir/model" --flow-run "$run_dir/routes" --out "$run_dir/feedback" \
   --updates 10 --layouts 2
 ```
@@ -87,10 +91,9 @@ The experiment guide covers matched expert and random collection, artifact locat
 Use the official state AntMaze-Large archives to train a goal-conditioned continuous-action policy. The development smoke run uses a saved reset and goal for each of the five benchmark tasks. [Dataset setup and matched evaluation](docs/experiments.md#train-the-antmaze-gcbc-baseline)
 
 ```bash
-uv sync --locked --group dev --extra ogbench
 mkdir -p results
 run_dir="$(mktemp -d results/antmaze-gcbc.XXXXXX)"
-JAX_PLATFORMS=cpu uv run --no-sync wr antmaze-gcbc \
+uv run --no-sync wr antmaze-gcbc \
   --dataset antmaze-large-navigate-v0 --out "$run_dir/navigate" \
   --updates 1000 --eval-repeats 1 --eval-steps 100
 ```

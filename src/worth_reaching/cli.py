@@ -4,6 +4,14 @@ import argparse
 import json
 from pathlib import Path
 
+from worth_reaching.compute import ComputeConfig
+
+
+def _devices(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.models.parallel import probe
+
+    return probe(args.batch_size)
+
 
 def _run_pilot(args: argparse.Namespace) -> dict[str, object]:
     from worth_reaching.evaluation.keycorridor import PilotConfig, run_pilot
@@ -116,7 +124,15 @@ def _antmaze_gcbc(args: argparse.Namespace) -> dict[str, object]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="wr")
+    parser.add_argument(
+        "--compute-config", type=Path, help="Read device settings before loading JAX"
+    )
     commands = parser.add_subparsers(required=True)
+    devices = commands.add_parser(
+        "devices", help="Check JAX devices and batch sharding"
+    )
+    devices.add_argument("--batch-size", type=int, default=17)
+    devices.set_defaults(run=_devices, extra="craftax", uses_jax=True)
     pilot = commands.add_parser("pilot", help="Run the CPU KeyCorridor diagnostic")
     pilot.add_argument("--config", type=Path, required=True)
     pilot.add_argument("--out", type=Path, required=True)
@@ -133,7 +149,7 @@ def main() -> None:
         "--task", help="Craftax terminal task (default: make_iron_pickaxe)"
     )
     collection.add_argument("--expert-checkpoint", type=Path)
-    collection.set_defaults(run=_collect, extra="craftax")
+    collection.set_defaults(run=_collect, extra="craftax", uses_jax=True)
     windows = commands.add_parser(
         "prepare-windows", help="Export masked windows from a Craftax collection"
     )
@@ -159,7 +175,7 @@ def main() -> None:
     training.add_argument(
         "--evaluate-test", action="store_true", help="Score frozen grid test worlds"
     )
-    training.set_defaults(run=_train_completion, extra="craftax")
+    training.set_defaults(run=_train_completion, extra="craftax", uses_jax=True)
     routes = commands.add_parser(
         "grid-routes",
         help="Sample latent grid routes and run matched waypoint attempts",
@@ -175,7 +191,7 @@ def main() -> None:
     routes.add_argument(
         "--layouts", type=int, help="Limit evaluated layouts for a smoke run"
     )
-    routes.set_defaults(run=_run_grid_routes, extra="craftax")
+    routes.set_defaults(run=_run_grid_routes, extra="craftax", uses_jax=True)
     feedback = commands.add_parser(
         "grid-feedback",
         help="Train from matched waypoint attempts and freeze the reranker",
@@ -190,7 +206,7 @@ def main() -> None:
     feedback.add_argument("--passage-slip", type=float, default=0.85)
     feedback.add_argument("--split", choices=("dev", "test"), default="dev")
     feedback.add_argument("--layouts", type=int)
-    feedback.set_defaults(run=_run_grid_feedback, extra="craftax")
+    feedback.set_defaults(run=_run_grid_feedback, extra="craftax", uses_jax=True)
     antmaze = commands.add_parser(
         "antmaze-gcbc",
         help="Train goal-conditioned cloning and score saved AntMaze starts",
@@ -216,7 +232,7 @@ def main() -> None:
     antmaze.add_argument(
         "--resume", type=Path, help="Continue from a compatible training run"
     )
-    antmaze.set_defaults(run=_antmaze_gcbc, extra="ogbench")
+    antmaze.set_defaults(run=_antmaze_gcbc, extra="ogbench", uses_jax=True)
     comparison = commands.add_parser(
         "attempt-compare", help="Fit and compare shared-bank selectors"
     )
@@ -228,6 +244,10 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
+        compute = ComputeConfig.load(args.compute_config)
+        compute.apply()
+        if getattr(args, "uses_jax", False):
+            compute.validate_backend()
         summary = args.run(args)
     except ModuleNotFoundError as error:
         if error.name not in {
@@ -247,4 +267,6 @@ def main() -> None:
         )
     except (ValueError, OSError) as error:
         parser.error(str(error))
-    print(json.dumps({"run_id": args.out.name, "out": str(args.out), **summary}))
+    if hasattr(args, "out"):
+        summary = {"run_id": args.out.name, "out": str(args.out), **summary}
+    print(json.dumps(summary))

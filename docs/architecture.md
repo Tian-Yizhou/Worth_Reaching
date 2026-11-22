@@ -27,6 +27,10 @@ The `src/worth_reaching/` package groups code by responsibility.
 
 The trajectory completion model will use public data from `data/`. Its executor will consume public observations and emit primitive actions. Evaluation owns simulator snapshots and restores them for matched repeats. [Trajectory completion design](trajectory-completion.md)
 
+## Training on multiple devices
+
+The Flax training steps use JAX's native automatic parallelization. A local `data` mesh shards the leading axis of each global training batch and replicates parameters and Optax state. JAX compiles the globally normalized losses and cross-device reductions. Padding makes the physical batch divisible by the mesh size while its mask preserves the requested global sample count. Checkpoints retain global tensor shapes and can be restored with a different device count. Evaluation keeps serial simulator execution and a single device for model inference. [JAX automatic parallelization](https://docs.jax.dev/en/latest/parallel.html) · [Compute configuration](experiments.md#compute-devices)
+
 ## Execution and data contracts
 
 1. A collector creates root episodes and records the public prefix, behavior policy and observable task outcomes. An adapter can additionally emit an opaque snapshot handle into a private store.

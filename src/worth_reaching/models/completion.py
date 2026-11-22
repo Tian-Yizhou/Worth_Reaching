@@ -13,6 +13,12 @@ from flax import linen as nn
 from flax.training.train_state import TrainState
 
 from worth_reaching.data.completion import CompletionExample, CompletionInput
+from worth_reaching.models.parallel import (
+    mean_squared,
+    replicate,
+    shard_batch,
+    single_device,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,21 +184,28 @@ def _loss(predicted: jax.Array, target: jax.Array, valid: jax.Array) -> jax.Arra
 
 
 @jax.jit
-def _fit_codec(state: TrainState, observations: jax.Array) -> TrainState:
+def _fit_codec(
+    state: TrainState, observations: jax.Array, valid: jax.Array | None
+) -> TrainState:
     def objective(params):
-        return jnp.mean(jnp.square(state.apply_fn(params, observations) - observations))
+        return mean_squared(state.apply_fn(params, observations) - observations, valid)
 
     return state.apply_gradients(grads=jax.grad(objective)(state.params))
 
 
 @jax.jit
 def _fit_predictor(
-    state: TrainState, inputs: PackedInput, history: jax.Array, targets: jax.Array
+    state: TrainState,
+    inputs: PackedInput,
+    history: jax.Array,
+    targets: jax.Array,
+    valid: jax.Array | None,
 ) -> TrainState:
     def objective(params):
-        return _loss(
-            state.apply_fn(params, inputs, history), targets, inputs.queries > 0
-        )
+        query_mask = inputs.queries > 0
+        if valid is not None:
+            query_mask = query_mask & valid[:, None]
+        return _loss(state.apply_fn(params, inputs, history), targets, query_mask)
 
     return state.apply_gradients(grads=jax.grad(objective)(state.params))
 
@@ -234,6 +247,7 @@ def fit(
         params=codec.init(codec_key, training[0].target.observations[:1]),
         tx=optimizer,
     )
+    codec_state = replicate(codec_state)
     for _ in range(config.encoder_updates):
         observations = np.stack(
             [
@@ -243,32 +257,40 @@ def fit(
                 for index in encoder_rng.integers(len(training), size=config.batch_size)
             ]
         )
-        codec_state = _fit_codec(codec_state, observations)
+        observations, valid = shard_batch(observations)
+        codec_state = _fit_codec(codec_state, observations, valid)
 
     codec_params = codec_state.params
     example_input, _ = pack_windows(training[:1], spec, config)
-    encoded = encode_observations(codec, codec_params, example_input.observations)
+    encoded = encode_observations(
+        codec, single_device(codec_params), example_input.observations
+    )
     initial = TrainState.create(
         apply_fn=predictor.apply,
         params=predictor.init(predictor_key, example_input, encoded),
         tx=optimizer,
     )
-    conditioned = goal_blind = initial
+    conditioned = goal_blind = replicate(initial)
     for _ in range(config.updates):
         indices = predictor_rng.integers(len(training), size=config.batch_size)
         inputs, targets = pack_windows(
             [training[index] for index in indices], spec, config
         )
+        (inputs, targets), valid = shard_batch((inputs, targets))
         history = encode_observations(codec, codec_params, inputs.observations)
         targets = encode_observations(codec, codec_params, targets)
-        conditioned = _fit_predictor(conditioned, inputs, history, targets)
-        goal_blind = _fit_predictor(goal_blind, inputs.without_goal(), history, targets)
+        conditioned = _fit_predictor(conditioned, inputs, history, targets, valid)
+        goal_blind = _fit_predictor(
+            goal_blind, inputs.without_goal(), history, targets, valid
+        )
     return (
         codec,
         predictor,
-        {
-            "codec": codec_params,
-            "conditioned": conditioned.params,
-            "goal_blind": goal_blind.params,
-        },
+        single_device(
+            {
+                "codec": codec_params,
+                "conditioned": conditioned.params,
+                "goal_blind": goal_blind.params,
+            }
+        ),
     )

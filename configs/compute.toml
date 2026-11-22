@@ -1,0 +1,5 @@
+[compute]
+# "auto" uses the available accelerator backend and falls back to CPU.
+platform = "auto"
+# Use "all" or a list of CUDA ordinals in the launcher's visible device set.
+gpus = "all"

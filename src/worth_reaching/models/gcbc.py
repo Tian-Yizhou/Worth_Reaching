@@ -10,6 +10,7 @@ from flax import linen as nn
 from flax.training.train_state import TrainState
 
 from worth_reaching.data.antmaze import ACTION_SIZE, OBSERVATION_SIZE
+from worth_reaching.models.parallel import mean_squared
 
 
 class GCBC(nn.Module):
@@ -42,10 +43,11 @@ def update(
     observation: np.ndarray,
     goal: np.ndarray,
     actions: np.ndarray,
+    valid: jax.Array | None = None,
 ) -> TrainState:
     def loss(params):
         predicted = state.apply_fn(params, observation, goal)
-        return jnp.square(predicted - actions).mean()
+        return mean_squared(predicted - actions, valid)
 
     return state.apply_gradients(grads=jax.grad(loss)(state.params))
 

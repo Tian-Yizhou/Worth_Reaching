@@ -18,6 +18,7 @@ from worth_reaching.evaluation import grid_execution as execution
 from worth_reaching.evaluation.attempt_selection import fit_attempt_heads
 from worth_reaching.models import route_flow
 from worth_reaching.models.completion import pack_inputs
+from worth_reaching.models.parallel import describe
 
 ARRIVAL_FLOOR = 0.25
 SLIP = 0.15
@@ -474,6 +475,7 @@ def run(checkpoint: Path, flow_run: Path, out: Path, config: FeedbackConfig) -> 
         out / "manifest.json",
         {
             "schema": "grid_route_feedback_v1",
+            "compute": describe(),
             "code_revision": code_revision(),
             "config": asdict(config),
             "checkpoint_sha256": checkpoint_hash,

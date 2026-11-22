@@ -23,6 +23,7 @@ from worth_reaching.models.completion import (
     pack_windows,
     predict,
 )
+from worth_reaching.models.parallel import describe
 
 
 def score_paired_routes(
@@ -199,6 +200,7 @@ def run_completion_training(
                 name: version(name) for name in ("jax", "flax", "optax", "numpy")
             },
             "jax_backend": jax.default_backend(),
+            "compute": describe(),
             "new_simulator_steps": 0,
         },
     )

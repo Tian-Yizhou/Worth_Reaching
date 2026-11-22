@@ -20,6 +20,12 @@ from worth_reaching.data.antmaze import (
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.envs import antmaze
 from worth_reaching.models import gcbc
+from worth_reaching.models.parallel import (
+    describe,
+    replicate,
+    shard_batch,
+    single_device,
+)
 
 SCHEMA = "antmaze_gcbc_v1"
 Policy = Callable[[np.ndarray, np.ndarray], np.ndarray]
@@ -211,6 +217,7 @@ def run(
                 )
             },
             "jax_backend": jax.default_backend(),
+            "compute": describe(),
             "evaluation": asdict(evaluation),
             "starts": str(start_bank.resolve()) if start_bank else None,
             "updates": updates,
@@ -239,7 +246,8 @@ def run(
         )
         return float(np.square(np.asarray(predicted) - validation_batch.actions).mean())
 
-    initial_error = validation_error(state.params)
+    state = replicate(state)
+    initial_error = validation_error(single_device(state.params))
     history = [{"step": first_step, "validation_action_mse": initial_error}]
     write_json(out / "history.json", history)
     if updates == first_step:
@@ -250,15 +258,17 @@ def run(
             train.batch_size,
             max_goal_steps=train.max_goal_steps,
         )
-        state = gcbc.update(
-            state,
-            (batch.observations - mean) / scale,
-            (batch.goals - mean) / scale,
-            batch.actions,
+        tensors, valid = shard_batch(
+            (
+                (batch.observations - mean) / scale,
+                (batch.goals - mean) / scale,
+                batch.actions,
+            )
         )
+        state = gcbc.update(state, *tensors, valid)
         if (index + 1) % checkpoint_every == 0 or index + 1 == updates:
             _save_training(out / "training.msgpack", state)
-            error = validation_error(state.params)
+            error = validation_error(single_device(state.params))
             history.append({"step": index + 1, "validation_action_mse": error})
             write_json(out / "history.json", history)
             print(
@@ -266,12 +276,11 @@ def run(
                 file=sys.stderr,
                 flush=True,
             )
-    (out / "weights.msgpack").write_bytes(serialization.to_bytes(state.params))
+    weights = single_device(state.params)
+    (out / "weights.msgpack").write_bytes(serialization.to_bytes(weights))
 
     def clone(observation: np.ndarray, goal: np.ndarray) -> np.ndarray:
-        return np.asarray(
-            gcbc.predict(model, state.params, observation, goal, mean, scale)
-        )
+        return np.asarray(gcbc.predict(model, weights, observation, goal, mean, scale))
 
     def zero(observation: np.ndarray, goal: np.ndarray) -> np.ndarray:
         return np.zeros(ACTION_SIZE, dtype=np.float32)

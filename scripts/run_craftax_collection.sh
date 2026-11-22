@@ -31,7 +31,7 @@ esac
 mkdir -p -- "$dataset_root"
 run_dir="$dataset_root/craftax-$policy-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 printf 'Writing results to %s\n' "$run_dir"
-JAX_PLATFORMS=cpu uv run --no-sync wr collect --config configs/craftax/iron_pickaxe.toml \
+uv run --no-sync wr collect --config configs/craftax/iron_pickaxe.toml \
   --episodes "$episodes" --budget "$budget" --seed-start "$seed_start" --task "$task" \
   --out "$run_dir" "${args[@]}" 2>&1 | tee "$run_dir.log"
 
