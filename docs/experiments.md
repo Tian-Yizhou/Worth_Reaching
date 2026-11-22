@@ -7,6 +7,7 @@ Use Python 3.12 or newer and run from the repository root. The [quick start](../
 | `results/datasets/` | Complete trajectory collections and their logs |
 | `results/completion.*/` | Masked trajectory windows and export manifests |
 | `results/grid-completion.*/` | Paired grid predictor weights, world assignments and evaluation |
+| `results/grid-routes.*/` | Latent flow checkpoints and matched attempt records |
 | `results/checkpoints/` | Policy and model weights |
 | `results/external/` | Isolated benchmark source trees and environments |
 | `results/_archive/` | Archived experiment runs, code snapshots and path maps |
@@ -61,7 +62,19 @@ The route comparison scores the steps where the two demonstrations occupy differ
 
 The default command evaluates development worlds. Add `--evaluate-test` for the grid after fixing the training recipe. Craftax uses its development windows and one task descriptor. Its latent and observation prediction errors check the training path on that corpus.
 
-Each output contains `manifest.json` for the settings and source, `splits.json` for the world assignments, `weights.msgpack` for the shared codec and both predictors, and `summary.json` for metrics. The grid uses a generated reference route per goal. Closed-loop task success and discovery of alternative routes are evaluated in later milestones.
+Each output contains `manifest.json` for the settings and source, `splits.json` for the world assignments, `weights.msgpack` for the shared codec and both predictors, and `summary.json` for metrics. The grid uses a generated reference route per goal.
+
+## Sample and execute alternative routes
+
+Run `wr grid-routes --checkpoint PATH --out PATH` with a grid completion checkpoint. By default it fits a conditional latent flow in 800 updates, samples eight routes per start and terminal goal, and evaluates eight matched repeats per candidate. The generator always trains on the original training layouts. Each training case contributes a shortest route through the passage on the destination side. A second demonstration through the opposite passage is included with probability 0.25 when feasible within 14 steps. Another eight layouts, disjoint from train, dev and test, provide demonstrations drawn by the same recipe with a separate random stream.
+
+The runner selects the middle entry of the ordered distinct free cells decoded before the destination, excluding the starting cell. Its attempt deadline is the forecast step plus one, capped to leave time for continuation. An unusable sample falls back to the direct controller. Arrival uses valid waypoint attempts as the denominator. Terminal success includes all attempts, and success after missing a valid waypoint is counted separately.
+
+The grid executor plans shortest paths using the public map. It recomputes after each action and turns to the terminal goal after arrival or the waypoint deadline. The open-loop arm replays its nominal action sequence. In each repeat all arms share a stream that independently replaces each action with a wait with probability 0.15. All arms use the 14-action budget and succeed if they occupy the specified destination at the deadline. The direct baseline targets the final destination from reset. The deterministic baseline decodes one route from the frozen predictor. The first flow draw provides a single-route comparison without using rollout scores for selection.
+
+The reference frequency counts one passage per demonstration. The candidate pool covers a route family when one valid target both arrives and succeeds through that passage in at least half its repeats. Coverage of both passages requires two different targets or deadlines. The low-support family threshold is 25% of reference episodes. This is a diagnostic of demonstrated passage families. The paired terminal difference between feedback and open loop includes a layout bootstrap interval.
+
+The default split is development. Once settings are fixed, use `--split test` and independent `--seed` values. `--layouts`, `--candidates`, `--repeats` and `--updates` can shorten a smoke run. `flow.msgpack`, `decisions.jsonl`, `manifest.json` and `summary.json` record weights, proposed latent targets, repeat masks, attempt results, and checkpoint provenance.
 
 ## Compare selectors on matched attempts
 

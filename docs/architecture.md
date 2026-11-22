@@ -20,7 +20,7 @@ The `src/worth_reaching/` package groups code by responsibility.
 | --- | --- |
 | `envs/` | Versioned simulator adaptations and terminal task rules |
 | `data/` | Collect complete public trajectories, validate world splits and export masked training and development windows |
-| `models/` | Encode observations, train a public-history predictor and complete masked latent positions |
+| `models/` | Encode observations, predict masked latent positions and sample residual trajectories |
 | `policies/` | Recurrent expert inference from public observations |
 | `evaluation/` | Replay, matched continuations, shared-bank comparisons and paired route scoring |
 | `cli.py` | Connect configurations to collection, window export, training and evaluation |
@@ -62,6 +62,10 @@ Each successful episode contributes a window from the reset and up to seven late
 The first trainer learns an observation autoencoder on masked training observations and freezes its encoder and decoder. Both predictors use that same target representation, initial predictor weights and sampled batches. A GRU summarizes public observations and their incoming actions. The predictor receives that history representation, the time remaining and the requested time offsets. The goal-conditioned arm also receives the public task identifier. It is trained to predict the encoded observation at each requested position.
 
 The trainer pads the recent history and uses evenly spaced queries across longer masks to bound batch size. Only the public-input packer feeds prediction. Target observations are encoded separately for training and metrics. The decoder translates predictions into observation space for diagnostics. The model saves inference weights, architecture and training settings. [Training and goal switch protocol](experiments.md#train-and-test-latent-trajectory-completion)
+
+## Sampled routes and attempts
+
+The grid flow learns the difference between a frozen prediction and an encoded demonstration for the complete interior window. It conditions on the starting observation, the goal and the frozen prediction. Each draw decodes to a route and declares one intermediate cell and attempt deadline. A feedback executor uses the observed cell to choose the next action. After arrival or timeout the same controller continues toward the terminal objective with the remaining budget. The evaluation runner supplies repeat streams, pairs those streams across candidates and saves the attempted latent target separately from the observed results. The route diagnostic uses a fixed grid horizon and exact public cell arrival. [Route generation and execution protocol](experiments.md#sample-and-execute-alternative-routes)
 
 ## Shared-attempt evaluation contract
 

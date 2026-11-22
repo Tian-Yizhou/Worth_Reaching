@@ -135,3 +135,75 @@ def test_training_cli_saves_public_input_predictors(tmp_path):
     )
     assert latent.shape == (2, spec.budget - 1, config.latent_size)
     np.testing.assert_array_equal(decoded[0], decoded[1])
+
+    routes = tmp_path / "routes"
+    subprocess.run(
+        [
+            "wr",
+            "grid-routes",
+            "--checkpoint",
+            out,
+            "--out",
+            routes,
+            "--updates",
+            "2",
+            "--layouts",
+            "1",
+            "--candidates",
+            "2",
+            "--repeats",
+            "2",
+            "--slip-probability",
+            "0",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    report = json.loads((routes / "summary.json").read_text(encoding="utf-8"))
+    assert report["cases"] == 18
+    assert report["arms"]["direct"]["terminal_success_rate"] == 1.0
+    assert report["arms"]["flow_feedback"]["attempts"] == 72
+    assert report["feedback_minus_replay_layout_bootstrap_95"] == [0.0, 0.0]
+    assert set(
+        serialization.msgpack_restore((routes / "flow.msgpack").read_bytes())
+    ) == {"params", "scale"}
+    with (routes / "decisions.jsonl").open(encoding="utf-8") as stream:
+        row = json.loads(next(stream))
+    assert [item["id"] for item in row["candidates"]] == [
+        "direct",
+        "deterministic",
+        "flow_0",
+        "flow_1",
+    ]
+    assert row["candidates"][2]["trials"] == row["candidates"][2]["open_loop"]
+
+
+def test_rollout_retains_terminal_success_after_waypoint_miss():
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("flax")
+    from worth_reaching.data.completion import CompletionInput
+    from worth_reaching.envs import grid_routes as grid
+    from worth_reaching.evaluation.grid_execution import Waypoint, rollout
+
+    start, markers = (2, 2), ((5, 0), (5, 6))
+    observation = grid.grid_observation(start, (1, 5), markers)
+    public = CompletionInput(
+        observation[None],
+        np.empty(0, dtype=np.int32),
+        grid.GOALS[0],
+        grid.BUDGET,
+        np.arange(1, grid.BUDGET, dtype=np.int32),
+    )
+    waypoint = Waypoint((2, 1), 1)
+    slips = np.zeros(grid.BUDGET, dtype=bool)
+    nominal, replay = rollout(public, waypoint, slips)
+    assert nominal.arrived_step == 1 and nominal.success and nominal.passage == "near"
+    slips[0] = True
+    feedback, _ = rollout(public, waypoint, slips)
+    open_loop, _ = rollout(public, waypoint, slips, replay=replay)
+    assert feedback.waypoint_attempted and feedback.arrived_step is None
+    assert feedback.success and feedback.passage == "near"
+    assert open_loop.arrived_step is None and not open_loop.success
+    with pytest.raises(ValueError, match="unachieved"):
+        rollout(public, Waypoint(start, 1), slips)

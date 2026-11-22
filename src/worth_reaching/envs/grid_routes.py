@@ -2,6 +2,7 @@
 
 from collections import deque
 from dataclasses import dataclass
+from functools import lru_cache
 from itertools import product
 
 import numpy as np
@@ -18,6 +19,8 @@ BUDGET = 14
 GOALS = ("reach_red", "reach_blue")
 MOVES = ((1, 0), (-1, 0), (0, -1), (0, 1))
 ACTION_COUNT = len(MOVES) + 1
+WAIT = len(MOVES)
+WALL_ROW = 3
 SPLIT_SEED = 813
 LAYOUT_COUNTS = (32, 8, 16)
 STARTS = tuple(product(range(3), range(2, 5)))
@@ -26,6 +29,47 @@ Position = tuple[int, int]
 
 def layout_id(world_id: str) -> str:
     return world_id.split("-start-", 1)[0]
+
+
+def is_free(position: Position, passages: tuple[int, ...]) -> bool:
+    y, x = position
+    return 0 <= y < SIZE and 0 <= x < SIZE and (y != WALL_ROW or x in passages)
+
+
+def move(position: Position, action: int, passages: tuple[int, ...]) -> Position:
+    if action == WAIT:
+        return position
+    dy, dx = MOVES[action]
+    destination = (position[0] + dy, position[1] + dx)
+    return destination if is_free(destination, passages) else position
+
+
+@lru_cache(maxsize=16384)
+def shortest_route(
+    start: Position, goal: Position, passages: tuple[int, ...]
+) -> tuple[tuple[Position, ...], tuple[int, ...]]:
+    queue = deque([(start, (start,), ())])
+    seen = {start}
+    while queue:
+        position, positions, actions = queue.popleft()
+        if position == goal:
+            return positions, actions
+        for action in range(len(MOVES)):
+            next_position = move(position, action, passages)
+            if next_position not in seen:
+                seen.add(next_position)
+                queue.append(
+                    (next_position, (*positions, next_position), (*actions, action))
+                )
+    raise ValueError("Grid goal is unreachable")
+
+
+def grid_observation(
+    position: Position, passages: tuple[int, int], markers: tuple[Position, Position]
+) -> np.ndarray:
+    return np.asarray(
+        (*position, *passages, *markers[0], *markers[1]), dtype=np.float32
+    ) / (SIZE - 1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,35 +85,23 @@ class GridWorld:
         return f"grid-v2-{layout}-start-{self.start[0]}-{self.start[1]}"
 
     def route(self, goal: Position) -> tuple[tuple[Position, ...], tuple[int, ...]]:
-        queue = deque([(self.start, (self.start,), ())])
-        seen = {self.start}
-        while queue:
-            position, positions, actions = queue.popleft()
-            if position == goal:
-                waits = BUDGET - len(actions)
-                if waits < 0:
-                    raise RuntimeError("Grid route exceeds the action budget")
-                return positions + (goal,) * waits, actions + (len(MOVES),) * waits
-            for action, (dy, dx) in enumerate(MOVES):
-                y, x = next_position = (position[0] + dy, position[1] + dx)
-                if not (0 <= y < SIZE and 0 <= x < SIZE) or next_position in seen:
-                    continue
-                if y == 3 and x not in self.passages:
-                    continue
-                seen.add(next_position)
-                queue.append(
-                    (next_position, (*positions, next_position), (*actions, action))
-                )
-        raise RuntimeError("Grid goal is unreachable")
+        positions, actions = shortest_route(self.start, goal, self.passages)
+        waits = BUDGET - len(actions)
+        if waits < 0:
+            raise ValueError("Grid route exceeds the action budget")
+        return positions + (goal,) * waits, actions + (WAIT,) * waits
 
-    def demonstrations(
-        self, *, reverse_colors: bool, training: bool
-    ) -> list[CompletionExample]:
-        markers = (
+    def markers(self, reverse_colors: bool) -> tuple[Position, Position]:
+        return (
             (self.right_goal, self.left_goal)
             if reverse_colors
             else (self.left_goal, self.right_goal)
         )
+
+    def demonstrations(
+        self, *, reverse_colors: bool, training: bool
+    ) -> list[CompletionExample]:
+        markers = self.markers(reverse_colors)
         windows = [(0, BUDGET - 1)]
         if training:
             windows.extend(
@@ -80,13 +112,12 @@ class GridWorld:
         examples = []
         for goal, destination in zip(GOALS, markers, strict=True):
             positions, actions = self.route(destination)
-            observations = np.asarray(
+            observations = np.stack(
                 [
-                    (*position, *self.passages, *markers[0], *markers[1])
+                    grid_observation(position, self.passages, markers)
                     for position in positions
-                ],
-                dtype=np.float32,
-            ) / (SIZE - 1)
+                ]
+            )
             action_ids = np.asarray(actions, dtype=np.int32)
             for start, span in windows:
                 end = start + span
@@ -111,9 +142,9 @@ class GridWorld:
         return examples
 
 
-def grid_demonstrations(
-    *, include_test: bool = False
-) -> dict[str, list[CompletionExample]]:
+def grid_starts(
+    *, include_test: bool = False, include_reference: bool = False
+) -> dict[str, list[tuple[GridWorld, bool]]]:
     layouts = list(
         product(
             product(range(2), range(5, 7)),
@@ -124,17 +155,30 @@ def grid_demonstrations(
     permutation = np.random.default_rng(SPLIT_SEED).permutation(len(layouts))
     splits = {}
     start = 0
-    for split, count in zip(("train", "dev", "test"), LAYOUT_COUNTS, strict=True):
-        if split == "test" and not include_test:
-            break
-        splits[split] = [
-            example
-            for map_index, layout in enumerate(permutation[start : start + count])
-            for spawn_index, spawn in enumerate(STARTS)
-            for example in GridWorld(spawn, *layouts[layout]).demonstrations(
-                reverse_colors=(map_index + spawn_index) % 2 == 1,
-                training=split == "train",
-            )
-        ]
+    counts = (*LAYOUT_COUNTS, len(layouts) - sum(LAYOUT_COUNTS))
+    for split, count in zip(("train", "dev", "test", "reference"), counts, strict=True):
+        if (split != "test" or include_test) and (
+            split != "reference" or include_reference
+        ):
+            splits[split] = [
+                (GridWorld(spawn, *layouts[layout]), (map_index + spawn_index) % 2 == 1)
+                for map_index, layout in enumerate(permutation[start : start + count])
+                for spawn_index, spawn in enumerate(STARTS)
+            ]
         start += count
     return splits
+
+
+def grid_demonstrations(
+    *, include_test: bool = False
+) -> dict[str, list[CompletionExample]]:
+    return {
+        split: [
+            example
+            for world, reverse in starts
+            for example in world.demonstrations(
+                reverse_colors=reverse, training=split == "train"
+            )
+        ]
+        for split, starts in grid_starts(include_test=include_test).items()
+    }

@@ -14,6 +14,8 @@ Milestone 1 exports Craftax windows through `wr prepare-windows`. Its output sup
 
 Milestone 2 has a masked latent predictor and a paired grid diagnostic. The diagnostic switches the goal at a common start, scores the predicted intermediate route, and compares a predictor trained with the goal against a predictor trained with history and time alone. The same trainer accepts the single-goal Craftax windows. [Training and goal switch protocol](docs/experiments.md#train-and-test-latent-trajectory-completion)
 
+Milestone 3 adds a grid diagnostic that samples several latent routes for one goal, tries an intermediate target from each sample under paired disturbances, and reports arrival and terminal success against the same route executed open loop. Separate reference layouts measure demonstration support for each passage. [Route generation and execution protocol](docs/experiments.md#sample-and-execute-alternative-routes)
+
 ## Evaluation protocol
 
 Keep exploratory development worlds separate from test worlds. Freeze decision rules before the final comparison. Compare methods on matched starts and independent repeat streams. When isolating proposal quality, share the executor, terminal objective and candidate budget. Record all environment interactions used for training, proposal updates and evaluation. [Architecture](docs/architecture.md) · [Running experiments](docs/experiments.md)

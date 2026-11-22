@@ -59,6 +59,15 @@ run_dir="$(mktemp -d results/grid-completion.XXXXXX)"
 JAX_PLATFORMS=cpu uv run --no-sync wr train-completion --grid --out "$run_dir/model"
 ```
 
+### Execute sampled latent routes
+
+Use the grid checkpoint from the previous command as the frozen predictor. A conditional flow samples several routes from the same reset and tests their waypoints under matched disturbances. [Route generation and execution protocol](docs/experiments.md#sample-and-execute-alternative-routes)
+
+```bash
+JAX_PLATFORMS=cpu uv run --no-sync wr grid-routes \
+  --checkpoint "$run_dir/model" --out "$run_dir/routes" --layouts 2
+```
+
 ### Longer server runs
 
 The experiment guide covers matched expert and random collection, artifact locations, and selection on shared banks of prospective attempts. [Running experiments](docs/experiments.md)

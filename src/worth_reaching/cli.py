@@ -60,6 +60,21 @@ def _train_completion(args: argparse.Namespace) -> dict[str, object]:
     )
 
 
+def _run_grid_routes(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.grid_execution import ExecutionConfig, run
+
+    config = ExecutionConfig(
+        seed=args.seed,
+        updates=args.updates,
+        candidates=args.candidates,
+        repeats=args.repeats,
+        slip_probability=args.slip_probability,
+        split=args.split,
+        layouts=args.layouts,
+    )
+    return run(args.checkpoint, args.out, config)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="wr")
     commands = parser.add_subparsers(required=True)
@@ -106,6 +121,22 @@ def main() -> None:
         "--evaluate-test", action="store_true", help="Score frozen grid test worlds"
     )
     training.set_defaults(run=_train_completion, extra="craftax")
+    routes = commands.add_parser(
+        "grid-routes",
+        help="Sample latent grid routes and run matched waypoint attempts",
+    )
+    routes.add_argument("--checkpoint", type=Path, required=True)
+    routes.add_argument("--out", type=Path, required=True)
+    routes.add_argument("--seed", type=int, default=7)
+    routes.add_argument("--updates", type=int, default=800)
+    routes.add_argument("--candidates", type=int, default=8)
+    routes.add_argument("--repeats", type=int, default=8)
+    routes.add_argument("--slip-probability", type=float, default=0.15)
+    routes.add_argument("--split", choices=("dev", "test"), default="dev")
+    routes.add_argument(
+        "--layouts", type=int, help="Limit evaluated layouts for a smoke run"
+    )
+    routes.set_defaults(run=_run_grid_routes, extra="craftax")
     comparison = commands.add_parser(
         "attempt-compare", help="Fit and compare shared-bank selectors"
     )
