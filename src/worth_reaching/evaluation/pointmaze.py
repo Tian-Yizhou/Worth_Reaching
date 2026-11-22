@@ -2,7 +2,7 @@
 
 import gzip
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from importlib.metadata import version
 from pathlib import Path
 
@@ -10,6 +10,7 @@ import numpy as np
 from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
+from worth_reaching.data.maze_windows import MaskedBatch
 from worth_reaching.data.pointmaze import (
     ACTION_SIZE,
     load_dataset,
@@ -20,6 +21,8 @@ from worth_reaching.envs.pointmaze_tasks import TASKS
 from worth_reaching.evaluation.maze_planning import Policy, RecedingGoals
 from worth_reaching.models.maze_completion import CompletionConfig, fit
 from worth_reaching.models.training import describe, stream_seed, validate_resume
+
+ALIGNED_SCHEMA = "pointmaze_latent_completion_v3"
 
 
 def track(observation: np.ndarray, target: np.ndarray) -> np.ndarray:
@@ -73,6 +76,19 @@ def _summarize(episodes: list[dict]) -> dict:
     }
 
 
+def _window_coverage(batch: MaskedBatch, limit: int, supporting_episodes: int) -> dict:
+    spans, present = batch.context.remaining, batch.context.present
+    return {
+        "windows": len(spans),
+        "median_span": float(np.median(spans)),
+        "max_span": int(spans.max()),
+        "full_span_reset_windows": int(
+            np.count_nonzero((spans == limit) & (present.sum(axis=1) == 1))
+        ),
+        "episodes_long_enough": supporting_episodes,
+    }
+
+
 def run(
     data_dir: Path,
     out: Path,
@@ -85,10 +101,8 @@ def run(
     resume: Path | None = None,
 ) -> dict:
     task = TASKS[task_name]
-    if limit is None:
-        limit = task.action_limit
-    if not config.queries < limit <= task.action_limit or not 0 < repeats <= (
-        SEED_BASE["test"] - SEED_BASE["dev"]
+    if (limit is not None and not config.queries < limit <= task.action_limit) or not (
+        0 < repeats <= SEED_BASE["test"] - SEED_BASE["dev"]
     ):
         raise ValueError(
             f"Choose an action budget in {config.queries + 1}..{task.action_limit} "
@@ -96,6 +110,44 @@ def run(
         )
     dataset, file_hashes = load_dataset(data_dir, task.dataset_id)
     train, validation, episode_split = split_trajectories(dataset)
+    train_lengths, validation_lengths = (
+        train.episode_lengths,
+        validation.episode_lengths,
+    )
+    eligible = train_lengths[train_lengths > config.queries]
+    if not len(eligible):
+        raise ValueError(
+            "PointMaze training episodes are too short for the completion queries"
+        )
+    horizon_source = "requested" if limit is not None else "training_episode_p90"
+    if limit is None:
+        limit = min(
+            task.action_limit,
+            int(np.quantile(eligible, 0.9, method="lower")),
+            int(validation_lengths.max()),
+        )
+    train_support = int(np.count_nonzero(train_lengths >= limit))
+    validation_support = int(np.count_nonzero(validation_lengths >= limit))
+    if limit <= config.queries or not train_support or not validation_support:
+        raise ValueError(
+            f"The {limit}-step span is unsupported by the PointMaze archive "
+            f"(longest train/validation episodes: {train_lengths.max()}/{validation_lengths.max()}); "
+            "choose a covered --eval-steps value or supply longer trajectories"
+        )
+    config = replace(config, max_horizon=limit)
+    settings = dict(history=config.history, queries=config.queries, max_horizon=limit)
+    training = train.sample_windows(
+        np.random.default_rng([config.seed, 800]),
+        config.windows,
+        full_span_windows=max(1, config.windows // 4),
+        **settings,
+    )
+    validation_windows = validation.sample_windows(
+        np.random.default_rng(801),
+        512,
+        full_span_windows=128,
+        **settings,
+    )
     seeds = list(range(SEED_BASE[split], SEED_BASE[split] + repeats))
     native = dataset.recover_environment(eval_env=True)
     try:
@@ -104,7 +156,7 @@ def run(
         write_json(
             out / "manifest.json",
             {
-                "schema": "pointmaze_latent_completion_v2",
+                "schema": ALIGNED_SCHEMA,
                 "task": task_name,
                 "environment": native.spec.id,
                 "versions": {
@@ -114,6 +166,13 @@ def run(
                 "dataset": task.dataset_id,
                 "dataset_files_sha256": file_hashes,
                 "training": asdict(config),
+                "window_sampling": {
+                    "span_source": horizon_source,
+                    "train": _window_coverage(training, limit, train_support),
+                    "validation": _window_coverage(
+                        validation_windows, limit, validation_support
+                    ),
+                },
                 "evaluation": {"split": split, "seeds": seeds, "action_limit": limit},
                 "selection": "first sampled route, earliest queried state",
                 "compute": describe(),
@@ -121,19 +180,8 @@ def run(
             },
         )
         write_json(out / "split.json", episode_split)
-        settings = dict(
-            history=config.history,
-            queries=config.queries,
-            max_horizon=config.max_horizon,
-        )
-        training = train.sample_windows(
-            np.random.default_rng([config.seed, 800]), config.windows, **settings
-        )
         mean = train.observations.mean(axis=0)
         scale = np.maximum(train.observations.std(axis=0), 1e-3)
-        validation_windows = validation.sample_windows(
-            np.random.default_rng(801), 512, **settings
-        )
         model = fit(
             training,
             validation_windows,
@@ -182,7 +230,15 @@ def run(
                 recorded[f"latent_{seed}"] = guided_path
                 for plan in planner.plans:
                     plans.write(
-                        json.dumps({"seed": seed, **plan}, separators=(",", ":")) + "\n"
+                        json.dumps(
+                            {
+                                "seed": seed,
+                                "prediction_span": limit - plan["step"],
+                                **plan,
+                            },
+                            separators=(",", ":"),
+                        )
+                        + "\n"
                     )
     finally:
         native.close()

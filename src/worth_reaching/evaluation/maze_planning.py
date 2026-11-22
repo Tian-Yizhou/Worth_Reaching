@@ -1,15 +1,40 @@
 """Shared policy for pursuing decoded states and replanning from public history."""
 
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import numpy as np
 
 from worth_reaching.data.maze_windows import CompletionContext, query_offsets
-from worth_reaching.models.maze_completion import LearnedCompletion
+from worth_reaching.models.maze_completion import CompletionConfig, LearnedCompletion
 from worth_reaching.models.training import stream_seed
 
 Policy = Callable[[np.ndarray, np.ndarray], np.ndarray]
+
+
+def completion_context(
+    history: Sequence[tuple[np.ndarray, np.ndarray]]
+    | deque[tuple[np.ndarray, np.ndarray]],
+    goal: np.ndarray,
+    remaining: int,
+    config: CompletionConfig,
+) -> CompletionContext:
+    count = len(history)
+    observations = np.zeros((1, config.history, goal.size), dtype=np.float32)
+    actions = np.zeros((1, config.history, history[-1][1].size), dtype=np.float32)
+    observations[0, -count:], actions[0, -count:] = map(
+        np.stack, zip(*history, strict=True)
+    )
+    present = (np.arange(config.history) >= config.history - count)[None]
+    duration = np.array([remaining], dtype=np.int32)
+    return CompletionContext(
+        observations,
+        actions,
+        present,
+        goal[None],
+        duration,
+        query_offsets(duration, config.queries),
+    )
 
 
 class RecedingGoals:
@@ -45,6 +70,13 @@ class RecedingGoals:
         self.step += 1
         return action
 
+    def record_prefix_step(self, observation: np.ndarray, action: np.ndarray) -> None:
+        """Ingest an executed action so the next policy call replans at the handoff."""
+        self.history.append((observation, self.last_action))
+        self.last_action = action
+        self.step += 1
+        self.deadline = self.step
+
     def _plan(self, goal: np.ndarray) -> np.ndarray:
         config = self.completion.config
         remaining = min(self.limit - self.step, config.max_horizon)
@@ -52,18 +84,8 @@ class RecedingGoals:
             self.deadline = self.limit
             return goal
 
-        count = len(self.history)
-        observations = np.zeros((1, config.history, goal.size), dtype=np.float32)
-        actions = np.zeros((1, config.history, self.last_action.size), dtype=np.float32)
-        observations[0, -count:], actions[0, -count:] = map(
-            np.stack, zip(*self.history, strict=True)
-        )
-        present = (np.arange(config.history) >= config.history - count)[None]
-        duration = np.array([remaining], dtype=np.int32)
-        offsets = query_offsets(duration, config.queries)
-        context = CompletionContext(
-            observations, actions, present, goal[None], duration, offsets
-        )
+        context = completion_context(self.history, goal, remaining, config)
+        offsets = context.offsets
         routes, decoded = self.completion.propose(
             context, stream_seed(self.key, self.step)
         )

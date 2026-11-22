@@ -14,6 +14,7 @@ from worth_reaching.models.training import (
     PredictorStopping,
     RandomBatches,
     regression,
+    restore_weights,
     stage_resume,
     stream_seed,
     tensor,
@@ -116,6 +117,32 @@ class LearnedCompletion:
     scale: np.ndarray
     flow_scale: Tensor
 
+    @classmethod
+    def from_weights(
+        cls, config: CompletionConfig, values: dict
+    ) -> "LearnedCompletion":
+        mean, scale = values["mean"], values["scale"]
+        flow_scale = tensor(values["flow_scale"])
+        if (
+            mean.ndim != 1
+            or scale.shape != mean.shape
+            or not np.isfinite(mean).all()
+            or not (np.isfinite(scale) & (scale > 0)).all()
+            or flow_scale.shape != (config.latent_size,)
+            or not bool((torch.isfinite(flow_scale) & (flow_scale > 0)).all())
+        ):
+            raise ValueError("Invalid completion normalization or latent scale")
+        codec = ObservationCodec(config.width, config.latent_size, mean.size)
+        predictor = LatentTrajectory(
+            values["predictor"]["net.0.weight"].shape[1], config
+        )
+        restore_weights(codec, values["codec"])
+        restore_weights(predictor, values["predictor"])
+        generator = flow.load_parameters(
+            config.queries * config.latent_size, values["flow"]
+        )
+        return cls(config, codec, predictor, generator, mean, scale, flow_scale)
+
     @property
     def weights(self) -> dict:
         return {
@@ -136,20 +163,27 @@ class LearnedCompletion:
         return self.codec.decode(latent).numpy() * self.scale + self.mean
 
     def propose(
-        self, context: CompletionContext, seed: int
+        self, context: CompletionContext, seed: int, *, candidates: int | None = None
     ) -> tuple[np.ndarray, np.ndarray]:
         features, forecast = self.forecast(context)
-        routes = self._sample(features, forecast, seed)
+        routes = self._sample(features, forecast, seed, candidates=candidates)
         return routes.numpy(), self.decode(routes)
 
-    def _sample(self, features: Tensor, forecast: Tensor, seed: int) -> Tensor:
+    def _sample(
+        self,
+        features: Tensor,
+        forecast: Tensor,
+        seed: int,
+        *,
+        candidates: int | None = None,
+    ) -> Tensor:
         return flow.sample(
             self.flow,
             forecast,
             _flow_condition(features, forecast),
             self.flow_scale,
             seed,
-            candidates=self.config.candidates,
+            candidates=self.config.candidates if candidates is None else candidates,
             steps=12,
         )
 

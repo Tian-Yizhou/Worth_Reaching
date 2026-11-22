@@ -33,6 +33,10 @@ class MazeTrajectories:
     actions: NDArray[np.float32]
     ends: NDArray[np.int64]
 
+    @property
+    def episode_lengths(self) -> NDArray[np.int64]:
+        return np.diff(self.ends, prepend=-1) - 1
+
     def sample_windows(
         self,
         rng: np.random.Generator,
@@ -41,12 +45,17 @@ class MazeTrajectories:
         history: int,
         queries: int,
         max_horizon: int,
+        full_span_windows: int = 0,
     ) -> MaskedBatch:
         """Sample a public prefix, held-out middle and hindsight endpoint in one episode."""
-        begins = np.r_[0, self.ends[:-1] + 1]
-        eligible = np.flatnonzero(self.ends - begins > queries)
+        lengths = self.episode_lengths
+        begins = self.ends - lengths
+        eligible = np.flatnonzero(lengths > queries)
         if not len(eligible):
             raise ValueError("The archive has no episodes long enough for the mask")
+        if not 0 <= full_span_windows <= size:
+            raise ValueError("Full-span windows must fit within the sample count")
+        size -= full_span_windows
         episodes = rng.choice(eligible, size=size)
         first, end = begins[episodes], self.ends[episodes]
         start = rng.integers(first, end - queries)
@@ -56,6 +65,18 @@ class MazeTrajectories:
         remaining = np.where(
             rng.random(size) < 0.25, available, rng.integers(queries + 1, available + 1)
         ).astype(np.int32)
+        if full_span_windows:
+            supported = np.flatnonzero(lengths >= max_horizon)
+            if not len(supported):
+                raise ValueError(
+                    f"The archive has no episodes spanning {max_horizon} actions"
+                )
+            reset_episodes = rng.choice(supported, size=full_span_windows)
+            start = np.concatenate((start, begins[reset_episodes]))
+            first = np.concatenate((first, begins[reset_episodes]))
+            remaining = np.concatenate(
+                (remaining, np.full(full_span_windows, max_horizon, dtype=np.int32))
+            )
         offsets = query_offsets(remaining, queries)
         indexes = start[:, None] + np.arange(1 - history, 1)
         present = indexes >= first[:, None]

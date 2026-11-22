@@ -1,6 +1,7 @@
 import gzip
 import json
 import subprocess
+from hashlib import sha256
 
 import pytest
 
@@ -41,14 +42,16 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
         collector.close()
 
     out = tmp_path / "run"
-    selection = ["--eval-steps", "18"] if task == "medium" else ["--task", task]
-    steps = 18 if task == "medium" else action_limit
+    selection = ["--eval-steps", "18"] if task == "medium" else []
+    steps = 18
     subprocess.run(
         [
             "wr",
             "pointmaze-latent",
             "--data-dir",
             data_dir,
+            "--task",
+            task,
             "--out",
             out,
             "--windows",
@@ -71,8 +74,16 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
     assert manifest["task"] == task
     assert manifest["dataset"] == dataset_id
     assert manifest["environment"] == environment
-    assert manifest["training"]["max_horizon"] == action_limit
+    assert manifest["training"]["max_horizon"] == steps
     assert manifest["evaluation"]["action_limit"] == steps
+    assert manifest["window_sampling"]["span_source"] == (
+        "requested" if selection else "training_episode_p90"
+    )
+    for name, minimum, episodes in (("train", 8, 5), ("validation", 128, 1)):
+        coverage = manifest["window_sampling"][name]
+        assert coverage["max_span"] == steps
+        assert coverage["full_span_reset_windows"] >= minimum
+        assert coverage["episodes_long_enough"] == episodes
     split = json.loads((out / "split.json").read_text())
     assert split == {
         "train_episodes": [0, 1, 2, 3, 4],
@@ -91,9 +102,156 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
             assert paths[f"latent_{latent['seed']}"].shape == (steps + 1, 4)
     with gzip.open(out / "plans.jsonl.gz", "rt") as stream:
         plan = json.loads(next(stream))
+        assert plan["prediction_span"] == steps
+        assert all(
+            row["prediction_span"] == steps - row["step"]
+            for row in map(json.loads, stream)
+        )
     assert np.asarray(plan["latent_routes"]).shape == (4, 8, 16)
     assert np.asarray(plan["decoded_routes"]).shape == (4, 8, 4)
     assert (
         json.loads((out / "summary.json").read_text())["evaluation_environment_steps"]
         == 4 * steps
     )
+    if task == "medium":
+        unsupported = tmp_path / "unsupported"
+        rejected = subprocess.run(
+            [
+                "wr",
+                "pointmaze-latent",
+                "--data-dir",
+                data_dir,
+                "--out",
+                unsupported,
+                "--eval-steps",
+                "19",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert rejected.returncode == 2
+        assert "The 19-step span is unsupported" in rejected.stderr
+        assert not unsupported.exists()
+        probe = tmp_path / "first-targets"
+        command = [
+            "wr",
+            "pointmaze-first-targets",
+            "--runs",
+            out,
+            "--data-dir",
+            data_dir,
+            "--max-starts",
+            "1",
+        ]
+        subprocess.run(
+            [*command, "--out", probe],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        replay = json.loads((probe / "episodes.json").read_text())
+        assert replay["direct"] == episodes["direct"][:1]
+        arms = replay["models"]["7"]
+        assert set(arms) == {"forecast", "sample_0", "sample_1", "sample_2", "sample_3"}
+        for name, (row,) in arms.items():
+            assert row["deadline"] == plan["deadline"] == 2
+            assert row["steps"] == steps
+            assert (row["seed"], row["start"], row["goal"]) == (
+                replay["direct"][0]["seed"],
+                replay["direct"][0]["start"],
+                replay["direct"][0]["goal"],
+            )
+            if name.startswith("sample_"):
+                index = int(name.removeprefix("sample_"))
+                np.testing.assert_allclose(
+                    row["target"], plan["decoded_routes"][index][0], atol=1e-6
+                )
+
+        continuations = tmp_path / "continuations"
+        subprocess.run(
+            [*command, "--compare-continuations", "--out", continuations],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        paired = json.loads((continuations / "episodes.json").read_text())
+        assert paired["direct"] == replay["direct"]
+        (pair,) = paired["models"]["7"]
+        assert pair["direct"] == arms["sample_0"][0]
+        assert pair["replanning"]["target"] == pair["direct"]["target"]
+        assert pair["replanning"]["steps"] == steps
+        handoff = pair["handoff_step"]
+        assert pair["plans"][0]["step"] == handoff == pair["direct"]["attempt_end_step"]
+        assert pair["plans"][0]["deadline"] == handoff + (steps - handoff) // 9
+        name = f"{pair['seed']}_7"
+        with np.load(continuations / "trajectories.npz", allow_pickle=False) as paths:
+            assert paths[f"{name}_prefix_actions"].shape == (handoff, 2)
+            np.testing.assert_array_equal(
+                paths[f"{name}_direct"][: handoff + 1],
+                paths[f"{name}_replanning"][: handoff + 1],
+            )
+        assert (
+            json.loads((continuations / "summary.json").read_text())[
+                "evaluation_environment_steps"
+            ]
+            == 3 * steps
+        )
+
+        energy_out = tmp_path / "energy"
+        subprocess.run(
+            [
+                "wr",
+                "pointmaze-latent-energy",
+                "--runs",
+                out,
+                "--data-dir",
+                data_dir,
+                "--out",
+                energy_out,
+                "--eval-repeats",
+                "1",
+                "--prefix-length",
+                "2",
+                "--candidates",
+                "3",
+                "--density-samples",
+                "8",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        bank_bytes = (energy_out / "candidate-bank.json").read_bytes()
+        energy_manifest = json.loads((energy_out / "manifest.json").read_text())
+        assert (
+            energy_manifest["candidate_bank_sha256"] == sha256(bank_bytes).hexdigest()
+        )
+        (declared,) = json.loads(bank_bytes)["7"]
+        assert declared["seed"] == 69001
+        assert declared["prediction_span"] == steps
+        assert declared["deadlines"] == [2, 4]
+        assert declared["candidate_seed"] != declared["reference_seed"]
+        assert (
+            declared["selections"]["lowest_energy"]
+            == min(declared["candidates"], key=lambda row: row["energy"])["index"]
+        )
+        outcomes = json.loads((energy_out / "episodes.json").read_text())
+        (observed,) = outcomes["models"]["7"]
+        assert observed["selections"] == declared["selections"]
+        for candidate, outcome in zip(
+            declared["candidates"], observed["attempts"], strict=True
+        ):
+            assert "success" not in candidate
+            assert len(candidate["latent_prefix"]) == len(candidate["targets"]) == 2
+            assert outcome["index"] == candidate["index"]
+            assert (outcome["start"], outcome["goal"], outcome["steps"]) == (
+                declared["start"],
+                declared["goal"],
+                steps,
+            )
+        assert (
+            json.loads((energy_out / "summary.json").read_text())[
+                "evaluation_environment_steps"
+            ]
+            == 4 * steps
+        )
