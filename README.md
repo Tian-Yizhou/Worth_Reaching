@@ -140,6 +140,16 @@ run_dir="$(mktemp -d results/ogbench-scene.XXXXXX)"
 uv run --no-sync wr scene-latent --out "$run_dir/state" --eval-repeats 1
 ```
 
+### Run state-based OGBench Puzzle
+
+Select one of four board sizes with `--board`. Each runs the five official goals by default. [Board and dataset mappings](docs/experiments.md#run-state-based-ogbench-puzzle)
+
+```bash
+uv run --no-sync python -c 'import ogbench; ogbench.download_datasets(["puzzle-4x4-play-v0"], dataset_dir="results/datasets/ogbench")'
+run_dir="$(mktemp -d results/ogbench-puzzle.XXXXXX)"
+uv run --no-sync wr puzzle-latent --board 4x4 --out "$run_dir/4x4" --eval-repeats 1
+```
+
 ## Contributing
 
 Choose a focused change from the implementation plan and include a reproducible check. Install the environment extras for the full CPU test suite. [Contribution guide](CONTRIBUTING.md) · [Implementation plan](PLAN.md)
