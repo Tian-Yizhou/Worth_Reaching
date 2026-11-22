@@ -6,24 +6,24 @@ from hashlib import sha256
 from importlib.metadata import version
 from pathlib import Path
 
-import jax
 import numpy as np
+import torch
 from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.data.completion import CompletionExample, load_completion_corpus
 from worth_reaching.envs import grid_routes
 from worth_reaching.models.completion import (
+    CHECKPOINT_SCHEMA,
     LatentPredictor,
     ModelSpec,
     ObservationCodec,
     TrainingConfig,
-    encode_observations,
     fit,
     pack_windows,
     predict,
 )
-from worth_reaching.models.parallel import describe
+from worth_reaching.models.training import describe, tensor, validate_resume, weights
 
 
 def score_paired_routes(
@@ -82,13 +82,14 @@ def score_paired_routes(
     }
 
 
+@torch.no_grad()
 def _evaluate(
     examples: Sequence[CompletionExample],
     spec: ModelSpec,
     config: TrainingConfig,
     codec: ObservationCodec,
-    predictor: LatentPredictor,
-    weights: dict,
+    conditioned: LatentPredictor,
+    goal_blind: LatentPredictor,
     *,
     paired_grid: bool,
 ) -> dict[str, object]:
@@ -101,21 +102,17 @@ def _evaluate(
         mask = np.asarray(inputs.queries) > 0
         masks.append(mask)
         observations.append(targets)
-        latent_targets.append(
-            np.asarray(encode_observations(codec, weights["codec"], targets))
-        )
-        for arm, public in (
-            ("conditioned", inputs),
-            ("goal_blind", inputs.without_goal()),
+        latent_targets.append(codec.encode(tensor(targets)).numpy())
+        for arm, predictor, public in (
+            ("conditioned", conditioned, inputs),
+            ("goal_blind", goal_blind, inputs.without_goal()),
         ):
-            latent, decoded = predict(
-                codec, predictor, weights["codec"], weights[arm], public
-            )
+            latent, decoded = predict(codec, predictor, public)
             outputs[arm].append((np.asarray(latent), np.asarray(decoded)))
     mask = np.concatenate(masks)
     targets = np.concatenate(observations)
     target_latents = np.concatenate(latent_targets)[mask]
-    reconstruction = codec.apply(weights["codec"], target_latents, method=codec.decode)
+    reconstruction = codec.decode(tensor(target_latents))
     scores = {
         "windows": len(examples),
         "target_steps": int(mask.sum()),
@@ -151,6 +148,7 @@ def run_completion_training(
     *,
     source: Path | None,
     evaluate_test: bool,
+    resume: Path | None = None,
 ) -> dict[str, object]:
     if source is None:
         datasets = grid_routes.grid_demonstrations(include_test=evaluate_test)
@@ -191,15 +189,14 @@ def run_completion_training(
     write_json(
         out / "manifest.json",
         {
-            "schema": "latent_completion_v1",
+            "schema": CHECKPOINT_SCHEMA,
             "config": asdict(config),
             "model": asdict(spec),
             "source": origin,
             "code_revision": code_revision(),
             "library_versions": {
-                name: version(name) for name in ("jax", "flax", "optax", "numpy")
+                name: version(name) for name in ("torch", "lightning", "numpy")
             },
-            "jax_backend": jax.default_backend(),
             "compute": describe(),
             "new_simulator_steps": 0,
         },
@@ -209,7 +206,13 @@ def run_completion_training(
         for split, rows in datasets.items()
     }
     write_json(out / "splits.json", worlds)
-    codec, predictor, weights = fit(datasets["train"], spec, config)
+    codec, conditioned, goal_blind = fit(
+        datasets["train"],
+        spec,
+        config,
+        out / "checkpoints",
+        validate_resume(out, resume),
+    )
     summary = {
         "training_windows": len(datasets["train"]),
         "world_counts": {split: len(ids) for split, ids in worlds.items()},
@@ -219,14 +222,22 @@ def run_completion_training(
                 spec,
                 config,
                 codec,
-                predictor,
-                weights,
+                conditioned,
+                goal_blind,
                 paired_grid=source is None,
             )
             for split, rows in datasets.items()
             if split != "train"
         },
     }
-    (out / "weights.msgpack").write_bytes(serialization.to_bytes(weights))
+    (out / "weights.msgpack").write_bytes(
+        serialization.to_bytes(
+            {
+                "codec": weights(codec),
+                "conditioned": weights(conditioned),
+                "goal_blind": weights(goal_blind),
+            }
+        )
+    )
     write_json(out / "summary.json", summary)
     return summary

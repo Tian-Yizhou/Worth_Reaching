@@ -10,9 +10,13 @@ from worth_reaching.envs.pointmaze_tasks import TASKS as POINTMAZE_TASKS
 
 
 def _devices(args: argparse.Namespace) -> dict[str, object]:
-    from worth_reaching.models.parallel import probe
+    if args.framework == "jax":
+        from worth_reaching.models.parallel import probe
 
-    return probe(args.batch_size)
+        return probe(args.batch_size)
+    from worth_reaching.models.training import describe
+
+    return describe()
 
 
 def _run_pilot(args: argparse.Namespace) -> dict[str, object]:
@@ -66,7 +70,11 @@ def _train_completion(args: argparse.Namespace) -> dict[str, object]:
         queries_per_window=args.queries_per_window,
     )
     return run_completion_training(
-        args.out, config, source=args.windows, evaluate_test=args.evaluate_test
+        args.out,
+        config,
+        source=args.windows,
+        evaluate_test=args.evaluate_test,
+        resume=args.resume,
     )
 
 
@@ -82,7 +90,7 @@ def _run_grid_routes(args: argparse.Namespace) -> dict[str, object]:
         split=args.split,
         layouts=args.layouts,
     )
-    return run(args.checkpoint, args.out, config)
+    return run(args.checkpoint, args.out, config, resume=args.resume)
 
 
 def _run_grid_feedback(args: argparse.Namespace) -> dict[str, object]:
@@ -97,7 +105,7 @@ def _run_grid_feedback(args: argparse.Namespace) -> dict[str, object]:
         args.split,
         args.layouts,
     )
-    return run(args.checkpoint, args.flow_run, args.out, config)
+    return run(args.checkpoint, args.flow_run, args.out, config, resume=args.resume)
 
 
 def _antmaze_gcbc(args: argparse.Namespace) -> dict[str, object]:
@@ -160,6 +168,7 @@ def _antmaze_latent(args: argparse.Namespace) -> dict[str, object]:
         evaluation,
         args.starts,
         probe_first_candidates=args.probe_first_candidates,
+        resume=args.resume,
     )
 
 
@@ -182,6 +191,7 @@ def _pointmaze_latent(args: argparse.Namespace) -> dict[str, object]:
         split=args.eval_split,
         repeats=args.eval_repeats,
         limit=args.eval_steps,
+        resume=args.resume,
     )
 
 
@@ -205,6 +215,7 @@ def _kuka_latent(args: argparse.Namespace) -> dict[str, object]:
         split=args.eval_split,
         repeats=args.eval_repeats,
         limit=args.eval_steps,
+        resume=args.resume,
     )
 
 
@@ -230,20 +241,29 @@ def _manipulation_latent(args: argparse.Namespace) -> dict[str, object]:
         task=args.task,
         repeats=args.eval_repeats,
         limit=args.eval_steps,
+        resume=args.resume,
     )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="wr")
     parser.add_argument(
-        "--compute-config", type=Path, help="Read device settings before loading JAX"
+        "--compute-config",
+        type=Path,
+        help="Read device settings before loading ML libraries",
     )
     commands = parser.add_subparsers(required=True)
     devices = commands.add_parser(
-        "devices", help="Check JAX devices and batch sharding"
+        "devices", help="Report the devices available for training"
     )
-    devices.add_argument("--batch-size", type=int, default=17)
-    devices.set_defaults(run=_devices, extra="craftax", uses_jax=True)
+    devices.add_argument("--framework", choices=("torch", "jax"), default="torch")
+    devices.add_argument(
+        "--batch-size",
+        type=int,
+        default=17,
+        help="Batch size for the JAX sharding probe",
+    )
+    devices.set_defaults(run=_devices, extra="training")
     pilot = commands.add_parser("pilot", help="Run the CPU KeyCorridor diagnostic")
     pilot.add_argument("--config", type=Path, required=True)
     pilot.add_argument("--out", type=Path, required=True)
@@ -286,7 +306,7 @@ def main() -> None:
     training.add_argument(
         "--evaluate-test", action="store_true", help="Score frozen grid test worlds"
     )
-    training.set_defaults(run=_train_completion, extra="craftax", uses_jax=True)
+    training.set_defaults(run=_train_completion, extra="craftax")
     routes = commands.add_parser(
         "grid-routes",
         help="Sample latent grid routes and run matched waypoint attempts",
@@ -302,7 +322,7 @@ def main() -> None:
     routes.add_argument(
         "--layouts", type=int, help="Limit evaluated layouts for a smoke run"
     )
-    routes.set_defaults(run=_run_grid_routes, extra="craftax", uses_jax=True)
+    routes.set_defaults(run=_run_grid_routes, extra="craftax")
     feedback = commands.add_parser(
         "grid-feedback",
         help="Train from matched waypoint attempts and freeze the reranker",
@@ -317,7 +337,7 @@ def main() -> None:
     feedback.add_argument("--passage-slip", type=float, default=0.85)
     feedback.add_argument("--split", choices=("dev", "test"), default="dev")
     feedback.add_argument("--layouts", type=int)
-    feedback.set_defaults(run=_run_grid_feedback, extra="craftax", uses_jax=True)
+    feedback.set_defaults(run=_run_grid_feedback, extra="craftax")
     antmaze = commands.add_parser(
         "antmaze-gcbc",
         help="Train goal-conditioned cloning and score saved AntMaze starts",
@@ -343,7 +363,7 @@ def main() -> None:
     antmaze.add_argument(
         "--resume", type=Path, help="Continue from a compatible training run"
     )
-    antmaze.set_defaults(run=_antmaze_gcbc, extra="ogbench", uses_jax=True)
+    antmaze.set_defaults(run=_antmaze_gcbc, extra="ogbench")
     waypoints = commands.add_parser(
         "antmaze-waypoints",
         help="Compare direct and oracle waypoint execution with frozen GCBC",
@@ -359,7 +379,7 @@ def main() -> None:
     waypoints.add_argument("--waypoint-spacing", type=int, default=1)
     waypoints.add_argument("--waypoint-steps", type=int, default=150)
     waypoints.add_argument("--arrival-radius", type=float, default=1.0)
-    waypoints.set_defaults(run=_antmaze_waypoints, extra="ogbench", uses_jax=True)
+    waypoints.set_defaults(run=_antmaze_waypoints, extra="ogbench")
     latent = commands.add_parser(
         "antmaze-latent",
         help="Train masked latent completion and execute decoded AntMaze candidates",
@@ -391,7 +411,7 @@ def main() -> None:
     latent.add_argument("--eval-split", choices=("dev", "test"), default="dev")
     latent.add_argument("--eval-repeats", type=int, default=2)
     latent.add_argument("--eval-steps", type=int, default=1000)
-    latent.set_defaults(run=_antmaze_latent, extra="ogbench", uses_jax=True)
+    latent.set_defaults(run=_antmaze_latent, extra="ogbench")
     pointmaze = commands.add_parser(
         "pointmaze-latent",
         help="Train and evaluate latent completion on Maze2D U-Maze, Medium or Large",
@@ -413,7 +433,7 @@ def main() -> None:
         type=int,
         help="Action limit (defaults to the official task limit)",
     )
-    pointmaze.set_defaults(run=_pointmaze_latent, extra="pointmaze", uses_jax=True)
+    pointmaze.set_defaults(run=_pointmaze_latent, extra="pointmaze")
     kuka = commands.add_parser(
         "kuka-latent",
         help="Train and evaluate latent completion on conditional Kuka stacking",
@@ -435,7 +455,7 @@ def main() -> None:
     kuka.add_argument("--eval-split", choices=("dev", "test"), default="dev")
     kuka.add_argument("--eval-repeats", type=int, default=4)
     kuka.add_argument("--eval-steps", type=int, default=384)
-    kuka.set_defaults(run=_kuka_latent, extra="stacking", uses_jax=True)
+    kuka.set_defaults(run=_kuka_latent, extra="stacking")
     scene = commands.add_parser(
         "scene-latent",
         help="Train and evaluate latent planning on state-based OGBench Scene",
@@ -467,7 +487,7 @@ def main() -> None:
             type=int,
             help="Action limit (defaults to the official task limit)",
         )
-        command.set_defaults(run=_manipulation_latent, extra="ogbench", uses_jax=True)
+        command.set_defaults(run=_manipulation_latent, extra="ogbench")
     comparison = commands.add_parser(
         "attempt-compare", help="Fit and compare shared-bank selectors"
     )
@@ -476,15 +496,26 @@ def main() -> None:
     comparison.add_argument("--out", type=Path, required=True)
     comparison.add_argument("--seed", type=int, default=43301)
     comparison.set_defaults(run=_attempt_compare, extra="craftax")
+    for command in (training, routes, feedback, latent, pointmaze, kuka, scene, puzzle):
+        command.add_argument(
+            "--resume", type=Path, help="Continue from a compatible Lightning run"
+        )
     args = parser.parse_args()
 
     try:
         compute = ComputeConfig.load(args.compute_config)
         compute.apply()
-        if getattr(args, "uses_jax", False):
+        if (
+            getattr(args, "uses_jax", False)
+            or getattr(args, "framework", None) == "jax"
+        ):
             compute.validate_backend()
         summary = args.run(args)
     except ModuleNotFoundError as error:
+        if error.name in {"lightning", "torch", "torchdata"}:
+            parser.error(
+                "Add the training (CUDA) or training-cpu extra alongside your experiment extras in uv sync --locked"
+            )
         if error.name not in {
             "gymnasium",
             "minigrid",
@@ -501,8 +532,9 @@ def main() -> None:
             "optax",
         }:
             raise
+        extra = "craftax" if getattr(args, "framework", None) == "jax" else args.extra
         parser.error(
-            f"Install experiment dependencies with uv sync --locked --extra {args.extra}"
+            f"Install experiment dependencies with uv sync --locked --extra {extra}"
         )
     except (ValueError, OSError) as error:
         parser.error(str(error))

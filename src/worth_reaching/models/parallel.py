@@ -1,4 +1,4 @@
-"""Data-parallel JAX placement for replicated training state and global batches."""
+"""Device and batch diagnostic for the retained JAX Craftax environment."""
 
 import os
 from functools import lru_cache
@@ -35,16 +35,6 @@ def shard_batch(tree):
         jax.device_put(np.arange(size + padding) < size, placement) if padding else None
     )
     return jax.tree.map(place, tree), valid
-
-
-def replicate(tree):
-    mesh = training_mesh()
-    return jax.device_put(tree, NamedSharding(mesh, P())) if mesh.size > 1 else tree
-
-
-def single_device(tree):
-    mesh = training_mesh()
-    return jax.device_put(tree, mesh.devices.flat[0]) if mesh.size > 1 else tree
 
 
 def describe() -> dict[str, object]:

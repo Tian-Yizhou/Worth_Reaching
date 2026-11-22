@@ -87,6 +87,7 @@ def test_training_cli_saves_public_input_predictors(tmp_path):
         pack_inputs,
         predict,
     )
+    from worth_reaching.models.training import restore_weights
 
     out = tmp_path / "model"
     result = subprocess.run(
@@ -121,6 +122,8 @@ def test_training_cli_saves_public_input_predictors(tmp_path):
     codec = ObservationCodec(config.width, config.latent_size, spec.observation_size)
     predictor = LatentPredictor(spec, config.width, config.latent_size)
     weights = serialization.msgpack_restore((out / "weights.msgpack").read_bytes())
+    restore_weights(codec, weights["codec"])
+    restore_weights(predictor, weights["goal_blind"])
     source = grid_demonstrations()
     recent = max(source["train"], key=lambda window: window.start_step).inputs
     packed = pack_inputs([recent], spec, config)
@@ -130,9 +133,7 @@ def test_training_cli_saves_public_input_predictors(tmp_path):
     public = pack_inputs(
         [example.inputs for example in source["dev"][:2]], spec, config
     )
-    latent, decoded = predict(
-        codec, predictor, weights["codec"], weights["goal_blind"], public.without_goal()
-    )
+    latent, decoded = predict(codec, predictor, public.without_goal())
     assert latent.shape == (2, spec.budget - 1, config.latent_size)
     np.testing.assert_array_equal(decoded[0], decoded[1])
 

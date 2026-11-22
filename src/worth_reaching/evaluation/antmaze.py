@@ -1,15 +1,15 @@
 """Train and evaluate one GCBC policy on the state-based OGBench benchmark."""
 
+import csv
 import json
-import sys
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from importlib.metadata import version
 from pathlib import Path
 
-import jax
 import numpy as np
+import torch
 from flax import serialization
 
 from worth_reaching.data.antmaze import (
@@ -21,11 +21,12 @@ from worth_reaching.data.antmaze import (
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.envs import antmaze
 from worth_reaching.models import gcbc
-from worth_reaching.models.parallel import (
+from worth_reaching.models.training import (
     describe,
-    replicate,
-    shard_batch,
-    single_device,
+    regression,
+    resume_checkpoint,
+    train_stage,
+    weights,
 )
 
 Policy = Callable[[np.ndarray, np.ndarray], np.ndarray]
@@ -195,12 +196,6 @@ def score(
     return episodes, metrics
 
 
-def _save_training(path: Path, state) -> None:
-    temporary = path.with_suffix(".tmp")
-    temporary.write_bytes(serialization.to_bytes(state))
-    temporary.replace(path)
-
-
 def run(
     dataset: str,
     data_dir: Path,
@@ -223,7 +218,8 @@ def run(
     validation = load_antmaze_archive(validation_path)
     if archive.fingerprint == validation.fingerprint:
         raise ValueError("Training and validation must use distinct archives")
-    model, state = gcbc.initialize(train.width, train.seed, train.learning_rate)
+    torch.manual_seed(train.seed)
+    model = gcbc.GCBC(train.width)
     mean = archive.observations.mean(axis=0, dtype=np.float64).astype(np.float32)
     scale = np.maximum(archive.observations.std(axis=0, dtype=np.float64), 1e-3).astype(
         np.float32
@@ -236,16 +232,27 @@ def run(
         "validation_sha256": validation.fingerprint,
         "training": asdict(train),
     }
+    checkpoint = None
+    first_step = 0
     if resume is not None:
         previous = json.loads((resume / "manifest.json").read_text(encoding="utf-8"))
+        if previous.get("schema") == gcbc.LEGACY_SCHEMA:
+            raise ValueError(
+                "Flax GCBC checkpoints can be used as frozen policies. Resume a Lightning run with --resume."
+            )
         if any(previous.get(key) != value for key, value in provenance.items()):
             raise ValueError(
                 "Resume checkpoint disagrees with the training recipe or dataset files"
             )
-        state = serialization.from_bytes(
-            state, (resume / "training.msgpack").read_bytes()
+        checkpoint = resume_checkpoint(resume / "checkpoints" / "executor")
+        state = torch.load(checkpoint, map_location="cpu", weights_only=True)
+        first_step = state["global_step"]
+        model.load_state_dict(
+            {
+                name.removeprefix("model."): value
+                for name, value in state["state_dict"].items()
+            }
         )
-    first_step = int(state.step)
     if updates < first_step:
         raise ValueError(
             "The requested total updates must be at least the checkpoint step"
@@ -264,13 +271,11 @@ def run(
                     "ogbench",
                     "gymnasium",
                     "mujoco",
-                    "jax",
-                    "flax",
-                    "optax",
+                    "torch",
+                    "lightning",
                     "numpy",
                 )
             },
-            "jax_backend": jax.default_backend(),
             "compute": describe(),
             "evaluation": asdict(evaluation),
             "starts": str(start_bank.resolve()) if start_bank else None,
@@ -289,52 +294,48 @@ def run(
         max_goal_steps=train.max_goal_steps,
     )
 
-    def validation_error(weights: dict) -> float:
-        predicted = gcbc.predict(
-            model,
-            weights,
-            validation_batch.observations,
-            validation_batch.goals,
+    heldout = gcbc.normalized_batch(validation_batch, mean, scale)
+    with torch.no_grad():
+        initial_error = gcbc.validation_error(model, heldout).item()
+    stage = out / "checkpoints" / "executor"
+    model = train_stage(
+        model,
+        gcbc.BehaviorBatches(
+            archive,
             mean,
             scale,
-        )
-        return float(np.square(np.asarray(predicted) - validation_batch.actions).mean())
-
-    state = replicate(state)
-    initial_error = validation_error(single_device(state.params))
-    history = [{"step": first_step, "validation_action_mse": initial_error}]
-    write_json(out / "history.json", history)
-    if updates == first_step:
-        _save_training(out / "training.msgpack", state)
-    for index in range(first_step, updates):
-        batch = archive.sample(
-            np.random.default_rng([train.seed, 101, index]),
+            (train.seed, 101),
             train.batch_size,
-            max_goal_steps=train.max_goal_steps,
-        )
-        tensors, valid = shard_batch(
-            (
-                (batch.observations - mean) / scale,
-                (batch.goals - mean) / scale,
-                batch.actions,
-            )
-        )
-        state = gcbc.update(state, *tensors, valid)
-        if (index + 1) % checkpoint_every == 0 or index + 1 == updates:
-            _save_training(out / "training.msgpack", state)
-            error = validation_error(single_device(state.params))
-            history.append({"step": index + 1, "validation_action_mse": error})
-            write_json(out / "history.json", history)
-            print(
-                f"{index + 1}/{updates} updates | validation action MSE {error:.6f}",
-                file=sys.stderr,
-                flush=True,
-            )
-    weights = single_device(state.params)
-    (out / "weights.msgpack").write_bytes(serialization.to_bytes(weights))
-
-    def clone(observation: np.ndarray, goal: np.ndarray) -> np.ndarray:
-        return np.asarray(gcbc.predict(model, weights, observation, goal, mean, scale))
+            train.max_goal_steps,
+        ),
+        regression,
+        steps=updates,
+        learning_rate=train.learning_rate,
+        out=stage,
+        checkpoint_every=checkpoint_every,
+        resume=checkpoint,
+        validation=heldout,
+        validation_metric=gcbc.validation_error,
+    )
+    history = [{"step": first_step, "validation_action_mse": initial_error}]
+    metrics_file = stage / "metrics" / "version_0" / "metrics.csv"
+    if metrics_file.is_file():
+        with metrics_file.open(newline="", encoding="utf-8") as stream:
+            for row in csv.DictReader(stream):
+                if row.get("validation_loss"):
+                    history.append(
+                        {
+                            "step": int(float(row["validation_update"])),
+                            "validation_action_mse": float(row["validation_loss"]),
+                        }
+                    )
+    with torch.no_grad():
+        final_error = gcbc.validation_error(model, heldout).item()
+    if history[-1]["step"] != updates:
+        history.append({"step": updates, "validation_action_mse": final_error})
+    write_json(out / "history.json", history)
+    (out / "weights.msgpack").write_bytes(serialization.to_bytes(weights(model)))
+    clone = gcbc.policy_from_model(model, mean, scale)
 
     def zero(observation: np.ndarray, goal: np.ndarray) -> np.ndarray:
         return np.zeros(ACTION_SIZE, dtype=np.float32)

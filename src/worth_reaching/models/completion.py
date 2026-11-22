@@ -1,24 +1,36 @@
 """Learn latent predictions from public histories and masked observations."""
 
+import json
 from collections.abc import Sequence
+from copy import deepcopy
 from dataclasses import dataclass
-from functools import partial
+from pathlib import Path
 from typing import NamedTuple
 
-import jax
-import jax.numpy as jnp
 import numpy as np
-import optax
-from flax import linen as nn
-from flax.training.train_state import TrainState
+import torch
+from flax import serialization
+from torch import nn
+from torch.nn import functional as F
 
 from worth_reaching.data.completion import CompletionExample, CompletionInput
-from worth_reaching.models.parallel import (
-    mean_squared,
-    replicate,
-    shard_batch,
-    single_device,
+from worth_reaching.models.codec import (
+    ObservationCodec,
+    legacy_dense,
+    mlp,
+    reconstruction,
 )
+from worth_reaching.models.training import (
+    RandomBatches,
+    restore_weights,
+    stage_resume,
+    stream_seed,
+    tensor,
+    train_stage,
+)
+
+CHECKPOINT_SCHEMA = "latent_completion_v2"
+LEGACY_SCHEMA = "latent_completion_v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,15 +76,15 @@ class ModelSpec:
 
 
 class PackedInput(NamedTuple):
-    observations: jax.Array
-    actions: jax.Array
-    lengths: jax.Array
-    goal: jax.Array
-    remaining: jax.Array
-    queries: jax.Array
+    observations: np.ndarray
+    actions: np.ndarray
+    lengths: np.ndarray
+    goal: np.ndarray
+    remaining: np.ndarray
+    queries: np.ndarray
 
     def without_goal(self) -> "PackedInput":
-        return self._replace(goal=jnp.full_like(self.goal, -1))
+        return self._replace(goal=np.full_like(self.goal, -1))
 
 
 def _query_indices(span: int, limit: int) -> np.ndarray:
@@ -122,175 +134,199 @@ def pack_windows(
     return inputs, targets
 
 
-class ObservationCodec(nn.Module):
-    width: int
-    latent_size: int
-    observation_size: int
-
-    def setup(self) -> None:
-        self.encoder = nn.Sequential(
-            (nn.Dense(self.width), nn.gelu, nn.Dense(self.latent_size))
-        )
-        self.decoder = nn.Sequential(
-            (nn.Dense(self.width), nn.gelu, nn.Dense(self.observation_size))
-        )
-
-    def encode(self, observations: jax.Array) -> jax.Array:
-        return self.encoder(observations)
-
-    def decode(self, latents: jax.Array) -> jax.Array:
-        return self.decoder(latents)
-
-    def __call__(self, observations: jax.Array) -> jax.Array:
-        return self.decode(self.encode(observations))
+def one_hot(indices, count: int):
+    return F.one_hot(indices.clamp_min(0).long(), count) * (indices[..., None] >= 0)
 
 
 class LatentPredictor(nn.Module):
-    spec: ModelSpec
-    width: int
-    latent_size: int
+    def __init__(self, spec: ModelSpec, width: int, latent_size: int):
+        super().__init__()
+        self.spec = spec
+        self.history = nn.GRU(latent_size + spec.action_count, width, batch_first=True)
+        self.net = mlp(width + len(spec.goals) + 3, width, latent_size, layers=2)
 
-    @nn.compact
-    def __call__(self, inputs: PackedInput, encoded_history: jax.Array) -> jax.Array:
-        actions = jax.nn.one_hot(inputs.actions, self.spec.action_count)
-        history = jnp.concatenate((encoded_history, actions), axis=-1)
-        context, _ = nn.RNN(nn.GRUCell(self.width), return_carry=True)(
-            history, seq_lengths=inputs.lengths
+    def forward(self, history, actions, lengths, goal, remaining, queries):
+        features = torch.cat(
+            (history, one_hot(actions, self.spec.action_count)), dim=-1
         )
-        goal = jax.nn.one_hot(inputs.goal, len(self.spec.goals))
-        context = jnp.concatenate((context, goal), axis=-1)
-        context = jnp.broadcast_to(
-            context[:, None, :], (*inputs.queries.shape, context.shape[-1])
-        )
-        remaining = jnp.broadcast_to(inputs.remaining[:, None], inputs.queries.shape)
-        time = jnp.stack(
+        hidden, _ = self.history(features)
+        context = hidden[
+            torch.arange(len(hidden), device=hidden.device), lengths.long() - 1
+        ]
+        context = torch.cat((context, one_hot(goal, len(self.spec.goals))), dim=-1)
+        context = context[:, None].expand(-1, queries.shape[1], -1)
+        remaining = remaining[:, None].expand_as(queries)
+        time = torch.stack(
             (
                 remaining / self.spec.budget,
-                inputs.queries / self.spec.budget,
-                inputs.queries / remaining,
+                queries / self.spec.budget,
+                queries / remaining,
             ),
-            axis=-1,
+            dim=-1,
         )
-        hidden = nn.gelu(
-            nn.Dense(self.width)(jnp.concatenate((context, time), axis=-1))
+        return self.net(torch.cat((context, time), dim=-1))
+
+
+@torch.no_grad()
+def predictor_inputs(codec: ObservationCodec, inputs: PackedInput):
+    return (
+        codec.encode(tensor(inputs.observations)),
+        *(tensor(value) for value in inputs[1:]),
+    )
+
+
+@torch.no_grad()
+def predict(codec: ObservationCodec, predictor: LatentPredictor, inputs: PackedInput):
+    latent = predictor(*predictor_inputs(codec, inputs))
+    return latent, codec.decode(latent)
+
+
+@dataclass(frozen=True)
+class EncoderBatches:
+    observations: tuple[np.ndarray, ...]
+    batch_size: int
+    seed: int
+
+    def __call__(self, step: int):
+        rng = np.random.default_rng([self.seed, 0, step])
+        return (
+            tensor(
+                np.stack(
+                    [
+                        self.observations[index][
+                            rng.integers(len(self.observations[index]))
+                        ]
+                        for index in rng.integers(
+                            len(self.observations), size=self.batch_size
+                        )
+                    ]
+                )
+            ),
         )
-        hidden = nn.gelu(nn.Dense(self.width)(hidden))
-        return nn.Dense(self.latent_size)(hidden)
 
 
-def _loss(predicted: jax.Array, target: jax.Array, valid: jax.Array) -> jax.Array:
-    per_step = jnp.mean(jnp.square(predicted - target), axis=-1)
-    return jnp.sum(jnp.where(valid, per_step, 0.0)) / jnp.sum(valid)
-
-
-@jax.jit
-def fit_codec_step(
-    state: TrainState, observations: jax.Array, valid: jax.Array | None
-) -> TrainState:
-    def objective(params):
-        return mean_squared(state.apply_fn(params, observations) - observations, valid)
-
-    return state.apply_gradients(grads=jax.grad(objective)(state.params))
-
-
-@jax.jit
-def _fit_predictor(
-    state: TrainState,
-    inputs: PackedInput,
-    history: jax.Array,
-    targets: jax.Array,
-    valid: jax.Array | None,
-) -> TrainState:
-    def objective(params):
-        query_mask = inputs.queries > 0
-        if valid is not None:
-            query_mask = query_mask & valid[:, None]
-        return _loss(state.apply_fn(params, inputs, history), targets, query_mask)
-
-    return state.apply_gradients(grads=jax.grad(objective)(state.params))
-
-
-@partial(jax.jit, static_argnames=("codec",))
-def encode_observations(
-    codec: ObservationCodec, params, observations: jax.Array
-) -> jax.Array:
-    return codec.apply(params, observations, method=codec.encode)
-
-
-@partial(jax.jit, static_argnames=("codec", "predictor"))
-def predict(
-    codec: ObservationCodec,
-    predictor: LatentPredictor,
-    codec_params,
-    predictor_params,
-    inputs: PackedInput,
-) -> tuple[jax.Array, jax.Array]:
-    """Predict latent values and decode them for observation-space diagnostics."""
-    history = encode_observations(codec, codec_params, inputs.observations)
-    latent = predictor.apply(predictor_params, inputs, history)
-    return latent, codec.apply(codec_params, latent, method=codec.decode)
+def prediction_loss(model, batch):
+    *inputs, expected = batch
+    valid = inputs[-1][..., None] > 0
+    return ((model(*inputs) - expected, valid),)
 
 
 def fit(
-    training: Sequence[CompletionExample], spec: ModelSpec, config: TrainingConfig
-) -> tuple[ObservationCodec, LatentPredictor, dict]:
+    training: Sequence[CompletionExample],
+    spec: ModelSpec,
+    config: TrainingConfig,
+    out: Path,
+    resume: Path | None = None,
+) -> tuple[ObservationCodec, LatentPredictor, LatentPredictor]:
     if not training:
         raise ValueError("Latent completion requires training windows")
-    codec = ObservationCodec(config.width, config.latent_size, spec.observation_size)
-    predictor = LatentPredictor(spec, config.width, config.latent_size)
-    codec_key, predictor_key = jax.random.split(jax.random.key(config.seed))
-    encoder_rng = np.random.default_rng([config.seed, 0])
-    predictor_rng = np.random.default_rng([config.seed, 1])
-    optimizer = optax.adam(config.learning_rate)
-    codec_state = TrainState.create(
-        apply_fn=codec.apply,
-        params=codec.init(codec_key, training[0].target.observations[:1]),
-        tx=optimizer,
-    )
-    codec_state = replicate(codec_state)
-    for _ in range(config.encoder_updates):
-        observations = np.stack(
-            [
-                training[index].target.observations[
-                    encoder_rng.integers(len(training[index].target.observations))
-                ]
-                for index in encoder_rng.integers(len(training), size=config.batch_size)
-            ]
-        )
-        observations, valid = shard_batch(observations)
-        codec_state = fit_codec_step(codec_state, observations, valid)
-
-    codec_params = codec_state.params
-    example_input, _ = pack_windows(training[:1], spec, config)
-    encoded = encode_observations(
-        codec, single_device(codec_params), example_input.observations
-    )
-    initial = TrainState.create(
-        apply_fn=predictor.apply,
-        params=predictor.init(predictor_key, example_input, encoded),
-        tx=optimizer,
-    )
-    conditioned = goal_blind = replicate(initial)
-    for _ in range(config.updates):
-        indices = predictor_rng.integers(len(training), size=config.batch_size)
-        inputs, targets = pack_windows(
-            [training[index] for index in indices], spec, config
-        )
-        (inputs, targets), valid = shard_batch((inputs, targets))
-        history = encode_observations(codec, codec_params, inputs.observations)
-        targets = encode_observations(codec, codec_params, targets)
-        conditioned = _fit_predictor(conditioned, inputs, history, targets, valid)
-        goal_blind = _fit_predictor(
-            goal_blind, inputs.without_goal(), history, targets, valid
-        )
-    return (
-        codec,
-        predictor,
-        single_device(
-            {
-                "codec": codec_params,
-                "conditioned": conditioned.params,
-                "goal_blind": goal_blind.params,
-            }
+    torch.manual_seed(stream_seed(config.seed, 0))
+    codec = train_stage(
+        ObservationCodec(config.width, config.latent_size, spec.observation_size),
+        EncoderBatches(
+            tuple(example.target.observations for example in training),
+            config.batch_size,
+            config.seed,
         ),
+        reconstruction,
+        steps=config.encoder_updates,
+        learning_rate=config.learning_rate,
+        out=out / "codec",
+        resume=stage_resume(resume, "codec"),
     )
+    inputs, targets = pack_windows(training, spec, config)
+    with torch.no_grad():
+        encoded = codec.encode(tensor(targets))
+    torch.manual_seed(stream_seed(config.seed, 1))
+    initial = LatentPredictor(spec, config.width, config.latent_size)
+    predictors = []
+    for stage, public in (
+        ("conditioned", inputs),
+        ("goal_blind", inputs.without_goal()),
+    ):
+        arrays = (*predictor_inputs(codec, public), encoded)
+        predictors.append(
+            train_stage(
+                deepcopy(initial),
+                RandomBatches(arrays, config.batch_size, (config.seed, 1)),
+                prediction_loss,
+                steps=config.updates,
+                learning_rate=config.learning_rate,
+                out=out / stage,
+                resume=stage_resume(resume, stage),
+            )
+        )
+    return codec, *predictors
+
+
+def _legacy_predictor(params: dict) -> dict:
+    gru = params["GRUCell_0"]
+    values = legacy_dense(params, "net", "Dense_0", "Dense_1", "Dense_2")
+    zeros = np.zeros_like(gru["hn"]["bias"])
+    values.update(
+        {
+            "history.weight_ih_l0": np.concatenate(
+                [gru[f"i{gate}"]["kernel"].T for gate in "rzn"]
+            ),
+            "history.weight_hh_l0": np.concatenate(
+                [gru[f"h{gate}"]["kernel"].T for gate in "rzn"]
+            ),
+            "history.bias_ih_l0": np.concatenate(
+                [gru[f"i{gate}"]["bias"] for gate in "rzn"]
+            ),
+            "history.bias_hh_l0": np.concatenate([zeros, zeros, gru["hn"]["bias"]]),
+        }
+    )
+    return values
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenCompletion:
+    spec: ModelSpec
+    config: TrainingConfig
+    source: dict
+    codec: ObservationCodec
+    predictor: LatentPredictor
+
+    @classmethod
+    def load(cls, directory: Path) -> "FrozenCompletion":
+        manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+        if manifest.get("schema") not in (CHECKPOINT_SCHEMA, LEGACY_SCHEMA):
+            raise ValueError("Expected a latent completion checkpoint")
+        spec = ModelSpec(
+            **{**manifest["model"], "goals": tuple(manifest["model"]["goals"])}
+        )
+        config = TrainingConfig(**manifest["config"])
+        values = serialization.msgpack_restore(
+            (directory / "weights.msgpack").read_bytes()
+        )
+        codec_weights = values["codec"]
+        predictor_weights = values["conditioned"]
+        if manifest["schema"] == LEGACY_SCHEMA:
+            codec_weights = {
+                name: value
+                for section, params in codec_weights["params"].items()
+                for name, value in legacy_dense(
+                    params, section, "layers_0", "layers_2"
+                ).items()
+            }
+            predictor_weights = _legacy_predictor(predictor_weights["params"])
+        codec = ObservationCodec(
+            config.width, config.latent_size, spec.observation_size
+        )
+        predictor = LatentPredictor(spec, config.width, config.latent_size)
+        restore_weights(codec, codec_weights)
+        restore_weights(predictor, predictor_weights)
+        return cls(spec, config, manifest["source"], codec, predictor)
+
+    @torch.no_grad()
+    def forecast(self, inputs: PackedInput):
+        return self.predictor(*predictor_inputs(self.codec, inputs))
+
+    @torch.no_grad()
+    def encode(self, observations):
+        return self.codec.encode(tensor(observations))
+
+    @torch.no_grad()
+    def decode(self, latents):
+        return self.codec.decode(tensor(latents))

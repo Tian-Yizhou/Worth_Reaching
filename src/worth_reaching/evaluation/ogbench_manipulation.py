@@ -6,8 +6,8 @@ from dataclasses import asdict, dataclass
 from importlib.metadata import version
 from pathlib import Path
 
-import jax
 import numpy as np
+import torch
 from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
@@ -22,11 +22,14 @@ from worth_reaching.envs.ogbench_tasks import (
 from worth_reaching.evaluation.maze_planning import Policy, RecedingGoals
 from worth_reaching.models import gcbc
 from worth_reaching.models.maze_completion import CompletionConfig, fit
-from worth_reaching.models.parallel import (
+from worth_reaching.models.training import (
     describe,
-    replicate,
-    shard_batch,
-    single_device,
+    regression,
+    stage_resume,
+    stream_seed,
+    train_stage,
+    validate_resume,
+    weights,
 )
 
 
@@ -48,32 +51,29 @@ def _fit_executor(
     normalization: tuple[np.ndarray, np.ndarray],
     seed: int,
     config: ExecutorConfig,
+    out: Path,
+    resume: Path | None,
 ) -> tuple[Policy, dict]:
     mean, scale = normalization
-    model, state = gcbc.initialize(
-        config.width,
-        seed,
-        config.learning_rate,
-        observation_size=len(mean),
-        action_size=ACTION_SIZE,
-        relative_coordinates=0,
+    torch.manual_seed(seed)
+    model = train_stage(
+        gcbc.GCBC(config.width, len(mean), ACTION_SIZE, relative_coordinates=0),
+        gcbc.BehaviorBatches(
+            train,
+            mean,
+            scale,
+            (seed, 600),
+            config.batch_size,
+            config.short_goal_steps,
+            alternate_horizons=True,
+        ),
+        regression,
+        steps=config.updates,
+        learning_rate=config.learning_rate,
+        out=out,
+        resume=resume,
     )
-    state = replicate(state)
-    rng = np.random.default_rng([seed, 600])
-    for index in range(config.updates):
-        cap = config.short_goal_steps if index % 2 == 0 else None
-        batch = train.sample(rng, config.batch_size, max_goal_steps=cap)
-        inputs, valid = shard_batch(
-            (
-                (batch.observations - mean) / scale,
-                (batch.goals - mean) / scale,
-                batch.actions,
-            )
-        )
-        state = gcbc.update(state, *inputs, valid)
-    weights = single_device(state.params)
-    actor = gcbc.policy_from_weights(model, weights, mean, scale)
-    return actor, weights
+    return gcbc.policy_from_model(model, mean, scale), weights(model)
 
 
 def rollout(
@@ -119,6 +119,7 @@ def run(
     task: int | None,
     repeats: int,
     limit: int | None,
+    resume: Path | None = None,
 ) -> dict:
     if limit is None:
         limit = benchmark.action_limit
@@ -147,7 +148,7 @@ def run(
     write_json(
         out / "manifest.json",
         {
-            "schema": f"ogbench_{benchmark.family}_latent_v1",
+            "schema": f"ogbench_{benchmark.family}_latent_v2",
             "environment": benchmark.environment,
             "observation": "official_state",
             "versions": {
@@ -173,14 +174,22 @@ def run(
     scale = np.maximum(train.observations.std(axis=0, dtype=np.float64), 1e-3).astype(
         np.float32
     )
-    actor, actor_weights = _fit_executor(train, (mean, scale), config.seed, executor)
+    previous = validate_resume(out, resume)
+    actor, actor_weights = _fit_executor(
+        train,
+        (mean, scale),
+        config.seed,
+        executor,
+        out / "checkpoints" / "executor",
+        stage_resume(previous, "executor"),
+    )
     settings = dict(
         history=config.history, queries=config.queries, max_horizon=config.max_horizon
     )
     windows = train.sample_windows(
         np.random.default_rng([config.seed, 800]), config.windows, **settings
     )
-    model = fit(windows, mean, scale, config)
+    model = fit(windows, mean, scale, config, out / "checkpoints", previous)
     heldout = validation.sample_windows(np.random.default_rng(801), 512, **settings)
     metrics = model.validate(heldout, compare_xy=False)
     for label, cap in (("short", executor.short_goal_steps), ("all", None)):
@@ -195,7 +204,7 @@ def run(
                 "executor": actor_weights,
                 "mean": mean,
                 "scale": scale,
-                "flow_scale": model.flow_scale,
+                "flow_scale": model.flow_scale.numpy(),
             }
         )
     )
@@ -209,11 +218,10 @@ def run(
                 for seed in seeds:
                     start = env.capture(task_id, seed)
                     starts.append(start)
-                    key = jax.random.fold_in(jax.random.key(config.seed), task_id)
                     planner = RecedingGoals(
                         actor,
                         model,
-                        jax.random.fold_in(key, seed),
+                        stream_seed(config.seed, task_id, seed),
                         limit,
                         action_size=ACTION_SIZE,
                     )

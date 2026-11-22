@@ -6,7 +6,6 @@ from dataclasses import asdict
 from importlib.metadata import version
 from pathlib import Path
 
-import jax
 import numpy as np
 from flax import serialization
 
@@ -20,7 +19,7 @@ from worth_reaching.envs.pointmaze import SEED_BASE, PointMaze
 from worth_reaching.envs.pointmaze_tasks import TASKS
 from worth_reaching.evaluation.maze_planning import Policy, RecedingGoals
 from worth_reaching.models.maze_completion import CompletionConfig, fit
-from worth_reaching.models.parallel import describe
+from worth_reaching.models.training import describe, stream_seed, validate_resume
 
 
 def track(observation: np.ndarray, target: np.ndarray) -> np.ndarray:
@@ -83,6 +82,7 @@ def run(
     split: str,
     repeats: int,
     limit: int | None,
+    resume: Path | None = None,
 ) -> dict:
     task = TASKS[task_name]
     if limit is None:
@@ -104,7 +104,7 @@ def run(
         write_json(
             out / "manifest.json",
             {
-                "schema": "pointmaze_latent_completion_v1",
+                "schema": "pointmaze_latent_completion_v2",
                 "task": task_name,
                 "environment": native.spec.id,
                 "versions": {
@@ -131,7 +131,14 @@ def run(
         )
         mean = train.observations.mean(axis=0)
         scale = np.maximum(train.observations.std(axis=0), 1e-3)
-        model = fit(training, mean, scale, config)
+        model = fit(
+            training,
+            mean,
+            scale,
+            config,
+            out / "checkpoints",
+            validate_resume(out, resume),
+        )
         validation_windows = validation.sample_windows(
             np.random.default_rng(801), 512, **settings
         )
@@ -143,7 +150,7 @@ def run(
                     **model.weights,
                     "mean": mean,
                     "scale": scale,
-                    "flow_scale": model.flow_scale,
+                    "flow_scale": model.flow_scale.numpy(),
                 }
             )
         )
@@ -156,7 +163,7 @@ def run(
                 planner = RecedingGoals(
                     track,
                     model,
-                    jax.random.fold_in(jax.random.key(config.seed), seed),
+                    stream_seed(config.seed, seed),
                     limit,
                     action_size=ACTION_SIZE,
                 )
