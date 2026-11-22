@@ -6,14 +6,14 @@ Worth Reaching studies how agents discover intermediate goals for long-horizon t
 
 The project asks whether agents can discover reliably executable goals that are rare in demonstrations, and whether sequencing those goals improves terminal success. The evaluation measures both the probability of reaching an intermediate goal and the probability of finishing the task after attempting it. Matched simulator starts allow several choices to be tested with the same information and budget.
 
-The planned comparison evaluates generated routes against direct execution and replay proposals on held-out worlds under matched budgets. The repository provides MiniGrid and Craftax environments, trajectory collection, and matched simulator branches for prospective evaluation. [Implementation plan](PLAN.md) · [Architecture](docs/architecture.md)
+The planned comparison evaluates generated routes against direct execution and replay proposals on held-out worlds under matched budgets. The repository includes MiniGrid and Craftax diagnostics and paired AntMaze and PointMaze benchmarks. [Implementation plan](PLAN.md) · [Architecture](docs/architecture.md)
 
 ## Quick start
 
 Use Python 3.12 or newer and run the commands below from the repository root. Install the environment extras for the experiments you plan to run. On an NVIDIA Linux server, include `--extra cuda12` to enable GPU training. [Install uv](https://docs.astral.sh/uv/getting-started/installation/) · [Compute configuration](docs/experiments.md#compute-devices)
 
 ```bash
-uv sync --locked --group dev --extra minigrid --extra craftax --extra ogbench --extra cuda12
+uv sync --locked --group dev --extra minigrid --extra craftax --extra ogbench --extra pointmaze --extra cuda12
 uv run --no-sync wr devices
 ```
 
@@ -109,12 +109,23 @@ uv run --no-sync wr antmaze-latent \
   --windows 128 --codec-updates 10 --predictor-updates 10 --flow-updates 10
 ```
 
-## Contributing
+### Run a Maze2D pilot
 
-Choose a focused change from the implementation plan and include a reproducible check. Install the MiniGrid, Craftax and OGBench extras for the full CPU test suite. [Contribution guide](CONTRIBUTING.md) · [Implementation plan](PLAN.md)
+Train and evaluate the same latent planner on Farama's maintained versions of D4RL Maze2D U-Maze, Medium and Large. Select a task with `--task umaze`, `--task medium` or `--task large`. The pilot pairs direct and latent planning from the same resets using a common controller. [Dataset setup and scoring protocol](docs/experiments.md#run-the-diffuser-maze2d-pilots)
 
 ```bash
-uv sync --locked --group dev --extra minigrid --extra craftax --extra ogbench
+MINARI_DATASETS_PATH="$PWD/results/datasets/minari" \
+  uv run --no-sync minari download D4RL/pointmaze/umaze-v2
+run_dir="$(mktemp -d results/pointmaze-diffuser.XXXXXX)"
+uv run --no-sync wr pointmaze-latent --task umaze --out "$run_dir/umaze"
+```
+
+## Contributing
+
+Choose a focused change from the implementation plan and include a reproducible check. Install the environment extras for the full CPU test suite. [Contribution guide](CONTRIBUTING.md) · [Implementation plan](PLAN.md)
+
+```bash
+uv sync --locked --group dev --extra minigrid --extra craftax --extra ogbench --extra pointmaze
 uv run --no-sync ruff check .
 uv run --no-sync ruff format --check src tests scripts
 JAX_PLATFORMS=cpu uv run --no-sync pytest

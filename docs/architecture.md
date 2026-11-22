@@ -85,6 +85,10 @@ The learned AntMaze planner first fits an observation encoder and decoder by rec
 
 The executor diagnostic uses privileged maze geometry inside the evaluator to predeclare an XY route. Its position tolerance controls the handoff between adjacent waypoints in that diagnostic. [Waypoint protocol](experiments.md#evaluate-antmaze-waypoint-execution)
 
+## PointMaze benchmark
+
+The learned PointMaze and AntMaze planners share the masked window sampler, completion model and time-based replanning policy. The PointMaze task determines the Minari archive, evaluation specification and official action limit. The loader retains four public position and velocity features and two continuous actions. The evaluator restores a natural reset from its seed and passes the public goal position with zero target velocity. The same feedback controller consumes either that goal or a decoded intermediate observation. The planner receives public observations and actions. The simulator's goal geometry and sparse rewards are available to the evaluator for setup and scoring. [Maze2D protocol](experiments.md#run-the-diffuser-maze2d-pilots)
+
 ## Shared-attempt evaluation contract
 
 The shared-attempt comparison fits its scoring heads on training starts and selects the reachability threshold on development starts. Each external simulator can export a `shared_attempts_v1` bank with disjoint root `world_id`s, fixed public features, a `direct` arm, and ordered matched trials for each candidate. An optional `native_choice` identifies the native selector's choice from the same bank. `public_bank` projects each record to the selection input. Selection uses only these projected fields. The evaluator uses the held-out arrival and terminal labels to score the frozen choices.

@@ -1,4 +1,4 @@
-"""Predict and sample masked AntMaze trajectories in the learned observation space."""
+"""Predict and sample masked continuous-control trajectories in latent space."""
 
 from dataclasses import dataclass
 from functools import partial
@@ -10,7 +10,7 @@ import optax
 from flax import linen as nn
 from flax.training.train_state import TrainState
 
-from worth_reaching.data.antmaze import OBSERVATION_SIZE, CompletionContext, MaskedBatch
+from worth_reaching.data.maze_windows import CompletionContext, MaskedBatch
 from worth_reaching.models import route_flow
 from worth_reaching.models.completion import (
     ObservationCodec,
@@ -228,11 +228,13 @@ def fit(
     scale: np.ndarray,
     config: CompletionConfig,
 ) -> LearnedCompletion:
-    codec = ObservationCodec(config.width, config.latent_size, OBSERVATION_SIZE)
+    codec = ObservationCodec(
+        config.width, config.latent_size, training.targets.shape[-1]
+    )
     predictor = LatentTrajectory(config.width, config.queries, config.latent_size)
     codec_key, predictor_key = jax.random.split(jax.random.key(config.seed))
     targets = (training.targets - mean) / scale
-    observations = targets.reshape(-1, OBSERVATION_SIZE)
+    observations = targets.reshape(-1, targets.shape[-1])
     optimizer = optax.adam(0.001)
     codec_state = replicate(
         TrainState.create(

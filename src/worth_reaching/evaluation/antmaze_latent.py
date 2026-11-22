@@ -2,7 +2,6 @@
 
 import gzip
 import json
-from collections import deque
 from dataclasses import asdict
 from hashlib import file_digest
 from pathlib import Path
@@ -14,100 +13,21 @@ from flax import serialization
 from worth_reaching.data.antmaze import (
     ACTION_SIZE,
     DATASETS,
-    OBSERVATION_SIZE,
-    CompletionContext,
     load_antmaze_archive,
-    query_offsets,
 )
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.envs import antmaze
 from worth_reaching.evaluation.antmaze import (
     EvalConfig,
-    Policy,
     evaluation_starts,
     paired_metrics,
     rollout,
     summarize_episodes,
 )
-from worth_reaching.models.antmaze_completion import (
-    CompletionConfig,
-    LearnedCompletion,
-    fit,
-)
+from worth_reaching.evaluation.maze_planning import RecedingGoals
 from worth_reaching.models.gcbc import load_policy
+from worth_reaching.models.maze_completion import CompletionConfig, fit
 from worth_reaching.models.parallel import describe
-
-
-class RecedingGoals:
-    """Condition the frozen actor on one decoded goal until a time-based replan."""
-
-    def __init__(
-        self,
-        actor: Policy,
-        completion: LearnedCompletion,
-        key: jax.Array,
-        limit: int,
-        *,
-        first_route: int = 0,
-    ):
-        self.actor = actor
-        self.completion = completion
-        self.key = key
-        self.limit = limit
-        self.first_route = first_route
-        self.step = self.deadline = 0
-        self.target = None
-        self.history: deque = deque(maxlen=completion.config.history)
-        self.last_action = np.zeros(ACTION_SIZE, dtype=np.float32)
-        self.plans: list[dict] = []
-
-    def __call__(self, observation: np.ndarray, goal: np.ndarray) -> np.ndarray:
-        self.history.append((observation, self.last_action))
-        if self.step == self.deadline:
-            self.target = self._plan(goal)
-        action = self.actor(observation, self.target)
-        self.last_action = action
-        self.step += 1
-        return action
-
-    def _plan(self, goal: np.ndarray) -> np.ndarray:
-        config = self.completion.config
-        remaining = min(self.limit - self.step, config.max_horizon)
-        if remaining <= config.queries:
-            self.deadline = self.limit
-            return goal
-
-        count = len(self.history)
-        observations = np.zeros((1, config.history, OBSERVATION_SIZE), dtype=np.float32)
-        actions = np.zeros((1, config.history, ACTION_SIZE), dtype=np.float32)
-        observations[0, -count:], actions[0, -count:] = map(
-            np.stack, zip(*self.history, strict=True)
-        )
-        present = (np.arange(config.history) >= config.history - count)[None]
-        duration = np.array([remaining], dtype=np.int32)
-        offsets = query_offsets(duration, config.queries)
-        context = CompletionContext(
-            observations, actions, present, goal[None], duration, offsets
-        )
-        routes, decoded = self.completion.propose(
-            context, jax.random.fold_in(self.key, self.step)
-        )
-        if not np.isfinite(routes).all() or not np.isfinite(decoded).all():
-            raise ValueError("AntMaze latent planner produced a non-finite candidate")
-        self.deadline = self.step + int(offsets[0, 0])
-        selected = self.first_route if self.step == 0 else 0
-        self.plans.append(
-            {
-                "step": self.step,
-                "deadline": self.deadline,
-                "query_offsets": offsets[0].tolist(),
-                "selected_route": selected,
-                "selected_query": 0,
-                "latent_routes": routes[0].tolist(),
-                "decoded_routes": decoded[0].tolist(),
-            }
-        )
-        return decoded[0, selected, 0]
 
 
 def _fingerprint(path: Path) -> str:
@@ -235,7 +155,9 @@ def run(
                     jax.random.fold_in(jax.random.key(config.seed), start.task),
                     start.seed,
                 )
-                controller = RecedingGoals(actor, model, key, evaluation.action_limit)
+                controller = RecedingGoals(
+                    actor, model, key, evaluation.action_limit, action_size=ACTION_SIZE
+                )
                 episode = rollout(env, start, controller, evaluation.action_limit)
                 guided.append({**episode, "plans": len(controller.plans)})
                 for plan in controller.plans:
@@ -256,7 +178,12 @@ def run(
                     )
                 for route, episodes in enumerate(candidate_episodes[1:], start=1):
                     alternative = RecedingGoals(
-                        actor, model, key, evaluation.action_limit, first_route=route
+                        actor,
+                        model,
+                        key,
+                        evaluation.action_limit,
+                        action_size=ACTION_SIZE,
+                        first_route=route,
                     )
                     episodes.append(
                         rollout(env, start, alternative, evaluation.action_limit)

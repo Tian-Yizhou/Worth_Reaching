@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from worth_reaching.compute import ComputeConfig
+from worth_reaching.envs.pointmaze_tasks import TASKS as POINTMAZE_TASKS
 
 
 def _devices(args: argparse.Namespace) -> dict[str, object]:
@@ -136,7 +137,7 @@ def _antmaze_waypoints(args: argparse.Namespace) -> dict[str, object]:
 def _antmaze_latent(args: argparse.Namespace) -> dict[str, object]:
     from worth_reaching.evaluation.antmaze import EvalConfig
     from worth_reaching.evaluation.antmaze_latent import run
-    from worth_reaching.models.antmaze_completion import CompletionConfig
+    from worth_reaching.models.maze_completion import CompletionConfig
 
     config = CompletionConfig(
         seed=args.seed,
@@ -158,6 +159,28 @@ def _antmaze_latent(args: argparse.Namespace) -> dict[str, object]:
         evaluation,
         args.starts,
         probe_first_candidates=args.probe_first_candidates,
+    )
+
+
+def _pointmaze_latent(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.pointmaze import run
+    from worth_reaching.models.maze_completion import CompletionConfig
+
+    return run(
+        args.data_dir,
+        args.out,
+        CompletionConfig(
+            seed=args.seed,
+            windows=args.windows,
+            max_horizon=POINTMAZE_TASKS[args.task].action_limit,
+            codec_updates=args.codec_updates,
+            predictor_updates=args.predictor_updates,
+            flow_updates=args.flow_updates,
+        ),
+        task_name=args.task,
+        split=args.eval_split,
+        repeats=args.eval_repeats,
+        limit=args.eval_steps,
     )
 
 
@@ -320,6 +343,28 @@ def main() -> None:
     latent.add_argument("--eval-repeats", type=int, default=2)
     latent.add_argument("--eval-steps", type=int, default=1000)
     latent.set_defaults(run=_antmaze_latent, extra="ogbench", uses_jax=True)
+    pointmaze = commands.add_parser(
+        "pointmaze-latent",
+        help="Train and evaluate latent completion on Maze2D U-Maze, Medium or Large",
+    )
+    pointmaze.add_argument("--task", choices=POINTMAZE_TASKS, default="medium")
+    pointmaze.add_argument(
+        "--data-dir", type=Path, default=Path("results/datasets/minari")
+    )
+    pointmaze.add_argument("--out", type=Path, required=True)
+    pointmaze.add_argument("--seed", type=int, default=7)
+    pointmaze.add_argument("--windows", type=int, default=4000)
+    pointmaze.add_argument("--codec-updates", type=int, default=250)
+    pointmaze.add_argument("--predictor-updates", type=int, default=600)
+    pointmaze.add_argument("--flow-updates", type=int, default=300)
+    pointmaze.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    pointmaze.add_argument("--eval-repeats", type=int, default=6)
+    pointmaze.add_argument(
+        "--eval-steps",
+        type=int,
+        help="Action limit (defaults to the official task limit)",
+    )
+    pointmaze.set_defaults(run=_pointmaze_latent, extra="pointmaze", uses_jax=True)
     comparison = commands.add_parser(
         "attempt-compare", help="Fit and compare shared-bank selectors"
     )
@@ -344,6 +389,9 @@ def main() -> None:
             "flax",
             "jax",
             "mujoco",
+            "minari",
+            "h5py",
+            "gymnasium_robotics",
             "numpy",
             "ogbench",
             "optax",

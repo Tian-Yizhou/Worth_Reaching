@@ -12,6 +12,7 @@ Use Python 3.12 or newer and run from the repository root. The [quick start](../
 | `results/antmaze-gcbc.*/` | GCBC checkpoints, matched reset banks and per-task rollout outcomes |
 | `results/antmaze-latent.*/` | Completion weights, sampled and decoded plans, and paired terminal outcomes |
 | `results/antmaze-waypoints.*/` | Paired direct and oracle waypoint execution outcomes |
+| `results/pointmaze-diffuser.*/` | PointMaze archive splits, decoded plans, executed trajectories and paired outcomes |
 | `results/checkpoints/` | Policy and model weights |
 | `results/external/` | Isolated benchmark source trees and environments |
 | `results/_archive/` | Archived experiment runs, code snapshots and path maps |
@@ -185,3 +186,31 @@ uv run --no-sync wr antmaze-waypoints --checkpoint "$checkpoint" \
 The evaluator follows the official maze distance map along one shortest cell path, keeps every corner, and samples intermediate cells at most `--waypoint-spacing` apart along straight segments. The default spacing is one cell. It copies the terminal goal vector and replaces only XY with the next cell center. The actor receives the current public state and that constructed target. The diagnostic switches to the next coordinate when observed XY is within `--arrival-radius` (default 1.0). After `--waypoint-steps` actions (default 150) without reaching the coordinate, it switches to the original terminal goal. The radius controls the handoff in this diagnostic. Terminal scores use the benchmark's official success event.
 
 `episodes.json` records the declared path, attempted waypoints, timeouts, and remaining terminal outcomes. The summary reports paired terminal success counts and a task-cluster bootstrap interval. Development starts are the default. Use `--eval-split test` to build an independent bank after freezing settings.
+
+## Run the Diffuser Maze2D pilots
+
+Diffuser's Maze2D experiment uses endpoint conditioning with four state coordinates and follows the generated states with position and velocity feedback. These pilots use Farama's maintained evaluation specifications. The paper reports scores on the original D4RL `maze2d-*-v1` environments and datasets. A same-version benchmark will run both methods on the same environments under matched budgets. [Diffuser task configuration](https://github.com/jannerm/diffuser/blob/maze2d/config/maze2d.py) · [Diffuser controller and evaluation](https://github.com/jannerm/diffuser/blob/maze2d/scripts/plan_maze2d.py)
+
+| `--task` | Gymnasium environment | Action limit | Minari dataset |
+| --- | --- | ---: | --- |
+| `umaze` | `PointMaze_UMaze-v3` | 300 | [`D4RL/pointmaze/umaze-v2`](https://minari.farama.org/datasets/D4RL/pointmaze/umaze-v2/#evaluation-environment-specs) |
+| `medium` (default) | `PointMaze_Medium-v3` | 600 | [`D4RL/pointmaze/medium-v2`](https://minari.farama.org/datasets/D4RL/pointmaze/medium-v2/#evaluation-environment-specs) |
+| `large` | `PointMaze_Large-v3` | 800 | [`D4RL/pointmaze/large-v2`](https://minari.farama.org/datasets/D4RL/pointmaze/large-v2/#evaluation-environment-specs) |
+
+```bash
+uv sync --locked --extra pointmaze
+export MINARI_DATASETS_PATH="$PWD/results/datasets/minari"
+mkdir -p results
+run_dir="$(mktemp -d results/pointmaze-diffuser.XXXXXX)"
+for task in umaze medium large; do
+  dataset="D4RL/pointmaze/$task-v2"
+  if [[ ! -f "$MINARI_DATASETS_PATH/$dataset/data/main_data.hdf5" ]]; then
+    uv run --no-sync minari download "$dataset"
+  fi
+  uv run --no-sync wr pointmaze-latent --task "$task" --out "$run_dir/$task"
+done
+```
+
+Include `--extra pointmaze` alongside any installed extras you want to keep, including `--extra cuda12` for GPU. Each Minari archive contains a continuing collection. The loader uses the first 80% of episodes by ID for fitting, skips the boundary episode and holds out the suffix for offline reconstruction and prediction diagnostics. The evaluator uses paired seeded resets on the fixed-goal, continuing task. Both arms use the task's action limit and the same position and velocity controller. Use `--eval-steps` for a shorter run. Direct execution tracks the terminal goal. Latent execution uses the earliest decoded state of the first sampled route and replans when the queried time offset elapses. Terminal success means the native success event occurred by the action limit. Sparse return is summed across the whole episode, including success steps. Use `--eval-split test` after fixing the recipe.
+
+The run stores the data hashes and versions in `manifest.json`, archive episode IDs in `split.json`, sampled latent and decoded routes in `plans.jsonl.gz`, executed public states in `trajectories.npz`, and scores in `episodes.json` and `summary.json`.
