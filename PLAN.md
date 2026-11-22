@@ -20,6 +20,8 @@ Milestone 4 has a feedback-training diagnostic with stochastic passage entry. It
 
 Milestone 5 starts with state AntMaze-Large. `wr antmaze-gcbc` reads the official navigation and stitching archives, trains a goal-conditioned executor and evaluates it from a reusable set of simulator starts and public goals. [AntMaze baseline protocol](docs/experiments.md#train-the-antmaze-gcbc-baseline)
 
+`wr antmaze-latent` learns masked trajectory completion from public AntMaze demonstrations. It samples latent routes, decodes an intermediate observation for the frozen executor, and replans from the observed rollout history. The development comparison pairs this loop with direct execution under the same reset, terminal goal and action limit. [Learned planner protocol](docs/experiments.md#run-learned-latent-planning-in-antmaze) · [Research design](docs/trajectory-completion.md)
+
 ## Evaluation protocol
 
 Keep exploratory development worlds separate from test worlds. Freeze decision rules before the final comparison. Compare methods on matched starts and independent repeat streams. When isolating proposal quality, share the executor, terminal objective and candidate budget. Record all environment interactions used for training, proposal updates and evaluation. [Architecture](docs/architecture.md) · [Running experiments](docs/experiments.md)

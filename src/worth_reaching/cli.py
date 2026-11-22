@@ -122,6 +122,44 @@ def _antmaze_gcbc(args: argparse.Namespace) -> dict[str, object]:
     )
 
 
+def _antmaze_waypoints(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.antmaze import EvalConfig
+    from worth_reaching.evaluation.antmaze_waypoints import WaypointConfig, run
+
+    evaluation = EvalConfig(args.eval_split, args.eval_repeats, args.eval_steps)
+    waypoint = WaypointConfig(
+        args.waypoint_spacing, args.waypoint_steps, args.arrival_radius
+    )
+    return run(args.checkpoint, args.out, evaluation, waypoint, args.starts)
+
+
+def _antmaze_latent(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.antmaze import EvalConfig
+    from worth_reaching.evaluation.antmaze_latent import run
+    from worth_reaching.models.antmaze_completion import CompletionConfig
+
+    config = CompletionConfig(
+        seed=args.seed,
+        windows=args.windows,
+        history=args.history,
+        queries=args.queries,
+        codec_updates=args.codec_updates,
+        predictor_updates=args.predictor_updates,
+        flow_updates=args.flow_updates,
+        candidates=args.candidates,
+    )
+    evaluation = EvalConfig(args.eval_split, args.eval_repeats, args.eval_steps)
+    return run(
+        args.dataset,
+        args.data_dir,
+        args.checkpoint,
+        args.out,
+        config,
+        evaluation,
+        args.starts,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="wr")
     parser.add_argument(
@@ -233,6 +271,49 @@ def main() -> None:
         "--resume", type=Path, help="Continue from a compatible training run"
     )
     antmaze.set_defaults(run=_antmaze_gcbc, extra="ogbench", uses_jax=True)
+    waypoints = commands.add_parser(
+        "antmaze-waypoints",
+        help="Compare direct and oracle waypoint execution with frozen GCBC",
+    )
+    waypoints.add_argument("--checkpoint", type=Path, required=True)
+    waypoints.add_argument("--out", type=Path, required=True)
+    waypoints.add_argument(
+        "--starts", type=Path, help="Reuse a matching AntMaze start bank"
+    )
+    waypoints.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    waypoints.add_argument("--eval-repeats", type=int, default=4)
+    waypoints.add_argument("--eval-steps", type=int, default=1000)
+    waypoints.add_argument("--waypoint-spacing", type=int, default=1)
+    waypoints.add_argument("--waypoint-steps", type=int, default=150)
+    waypoints.add_argument("--arrival-radius", type=float, default=1.0)
+    waypoints.set_defaults(run=_antmaze_waypoints, extra="ogbench", uses_jax=True)
+    latent = commands.add_parser(
+        "antmaze-latent",
+        help="Train masked latent completion and execute decoded AntMaze candidates",
+    )
+    latent.add_argument("--dataset", default="antmaze-large-navigate-v0")
+    latent.add_argument(
+        "--data-dir", type=Path, default=Path("results/datasets/ogbench")
+    )
+    latent.add_argument(
+        "--checkpoint", type=Path, required=True, help="Frozen GCBC executor run"
+    )
+    latent.add_argument("--out", type=Path, required=True)
+    latent.add_argument(
+        "--starts", type=Path, help="Reuse a matching AntMaze start bank"
+    )
+    latent.add_argument("--seed", type=int, default=7)
+    latent.add_argument("--windows", type=int, default=16000)
+    latent.add_argument("--history", type=int, default=4)
+    latent.add_argument("--queries", type=int, default=8)
+    latent.add_argument("--candidates", type=int, default=4)
+    latent.add_argument("--codec-updates", type=int, default=500)
+    latent.add_argument("--predictor-updates", type=int, default=1200)
+    latent.add_argument("--flow-updates", type=int, default=700)
+    latent.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    latent.add_argument("--eval-repeats", type=int, default=2)
+    latent.add_argument("--eval-steps", type=int, default=1000)
+    latent.set_defaults(run=_antmaze_latent, extra="ogbench", uses_jax=True)
     comparison = commands.add_parser(
         "attempt-compare", help="Fit and compare shared-bank selectors"
     )

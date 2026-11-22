@@ -1,16 +1,22 @@
 """Continuous-action goal-conditioned behavioral cloning for public state inputs."""
 
+import json
+from collections.abc import Callable
 from functools import partial
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 from flax import linen as nn
+from flax import serialization
 from flax.training.train_state import TrainState
 
 from worth_reaching.data.antmaze import ACTION_SIZE, OBSERVATION_SIZE
 from worth_reaching.models.parallel import mean_squared
+
+CHECKPOINT_SCHEMA = "antmaze_gcbc_v1"
 
 
 class GCBC(nn.Module):
@@ -65,3 +71,28 @@ def predict(
         weights, (observation - mean) / scale, (goal - mean) / scale
     )
     return jnp.clip(predicted, -1, 1)
+
+
+def load_policy(directory: Path) -> Callable[[np.ndarray, np.ndarray], np.ndarray]:
+    """Load one frozen actor with the same normalization as the training run."""
+    manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("schema") != CHECKPOINT_SCHEMA:
+        raise ValueError("Expected an AntMaze GCBC checkpoint")
+    model = GCBC(manifest["training"]["width"])
+    weights = serialization.msgpack_restore(
+        (directory / "weights.msgpack").read_bytes()
+    )
+    with np.load(directory / "normalization.npz", allow_pickle=False) as values:
+        mean, scale = values["mean"], values["scale"]
+    if (
+        mean.shape != (OBSERVATION_SIZE,)
+        or scale.shape != mean.shape
+        or not np.isfinite(mean).all()
+        or not (np.isfinite(scale) & (scale > 0)).all()
+    ):
+        raise ValueError("Invalid GCBC normalization")
+
+    def act(observation: np.ndarray, goal: np.ndarray) -> np.ndarray:
+        return np.asarray(predict(model, weights, observation, goal, mean, scale))
+
+    return act

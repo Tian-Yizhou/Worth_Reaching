@@ -10,6 +10,8 @@ Use Python 3.12 or newer and run from the repository root. The [quick start](../
 | `results/grid-routes.*/` | Latent flow checkpoints and matched attempt records |
 | `results/grid-feedback.*/` | Training attempts, target masks, updated flows and held-out feedback comparisons |
 | `results/antmaze-gcbc.*/` | GCBC checkpoints, matched reset banks and per-task rollout outcomes |
+| `results/antmaze-latent.*/` | Completion weights, sampled and decoded plans, and paired terminal outcomes |
+| `results/antmaze-waypoints.*/` | Paired direct and oracle waypoint execution outcomes |
 | `results/checkpoints/` | Policy and model weights |
 | `results/external/` | Isolated benchmark source trees and environments |
 | `results/_archive/` | Archived experiment runs, code snapshots and path maps |
@@ -150,3 +152,34 @@ uv run --no-sync wr antmaze-gcbc \
 Reuse `starts.npz` across comparisons with the same evaluation split and repeat count. The bank stores the exact reset observations, goals and integration state. The default evaluates four repeats for each task on development seeds with the 1,000-action horizon. Use `--eval-split test` after locking the recipe. Lower `--eval-steps` or `--eval-repeats` for smoke runs. A success comes from the benchmark's binary success event. The episode log also stores the initial, closest and final Euclidean distances in public XY coordinates.
 
 Each run saves its recipe and archive hashes in `manifest.json`, validation checkpoints in `history.json`, parameters and normalization separately, full optimizer state in `training.msgpack`, and exact starts and outcomes in `starts.npz` and `episodes.json`. To resume, pass `--resume PREVIOUS_RUN`, use the same training recipe and archives, specify a new output directory and set `--updates` to the new total. Setting that total to the checkpoint step reruns evaluation at the saved weights. The batch stream is indexed by update so it resumes at the same batch as an uninterrupted run.
+
+## Run learned latent planning in AntMaze
+
+Train the completion model on windows from the official navigation training archive. A window contains recent public observations and actions, a later observation from the same trajectory as its goal, and masked intermediate states at queried time offsets. The official validation archive supplies separate windows. Use a frozen GCBC checkpoint trained on navigation or stitching demonstrations. This example uses the stitching executor trained above.
+
+```bash
+checkpoint="$run_dir/stitch"
+latent_dir="$(mktemp -d results/antmaze-latent.XXXXXX)"
+uv run --no-sync wr antmaze-latent \
+  --dataset antmaze-large-navigate-v0 --checkpoint "$checkpoint" \
+  --out "$latent_dir/pilot"
+```
+
+By default the evaluator creates two development resets per official task. To reuse an existing bank, pass `--starts PATH` with the bank's `--eval-split` and `--eval-repeats`. Both arms get the same reset, original terminal goal, frozen actor and 1,000-action budget. The direct arm pursues the terminal goal throughout. At each replan the latent arm samples four routes and decodes eight states per route. Its fixed selection takes the first route's earliest state, then switches on the corresponding time offset. Each replan conditions on the observations and actions that actually occurred. When the remaining budget is too short to query an interior window, the actor pursues the terminal goal directly. The planner uses public inputs, and the benchmark's binary success event determines each episode's outcome.
+
+`plans.jsonl.gz` records the latent and decoded routes, selected slot, planned deadline and number of actions executed toward that target. The run also saves `weights.msgpack`, `manifest.json`, `starts.npz` and `episodes.json`. The `summary.json` reports paired terminal success, closest distance, and held-out forecast error against linear XY interpolation at the same query offsets. Use `--eval-split test` only after selecting the recipe on development data.
+
+## Evaluate AntMaze waypoint execution
+
+This executor diagnostic asks how far a frozen GCBC actor can follow coordinates supplied by the evaluator. The route comes from privileged simulator geometry. Both arms use the same checkpoint, resets, exact terminal goals, simulator success event and action limit.
+
+```bash
+checkpoint=results/antmaze-gcbc.example/navigate
+run_dir="$(mktemp -d results/antmaze-waypoints.XXXXXX)"
+uv run --no-sync wr antmaze-waypoints --checkpoint "$checkpoint" \
+  --starts "$checkpoint/starts.npz" --out "$run_dir/navigate"
+```
+
+The evaluator follows the official maze distance map along one shortest cell path, keeps every corner, and samples intermediate cells at most `--waypoint-spacing` apart along straight segments. The default spacing is one cell. It copies the terminal goal vector and replaces only XY with the next cell center. The actor receives the current public state and that constructed target. The diagnostic switches to the next coordinate when observed XY is within `--arrival-radius` (default 1.0). After `--waypoint-steps` actions (default 150) without reaching the coordinate, it switches to the original terminal goal. The radius controls the handoff in this diagnostic. Terminal scores use the benchmark's official success event.
+
+`episodes.json` records the declared path, attempted waypoints, timeouts, and remaining terminal outcomes. The summary reports paired terminal success counts and a task-cluster bootstrap interval. Development starts are the default. Use `--eval-split test` to build an independent bank after freezing settings.

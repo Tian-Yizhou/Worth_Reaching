@@ -184,7 +184,7 @@ def _loss(predicted: jax.Array, target: jax.Array, valid: jax.Array) -> jax.Arra
 
 
 @jax.jit
-def _fit_codec(
+def fit_codec_step(
     state: TrainState, observations: jax.Array, valid: jax.Array | None
 ) -> TrainState:
     def objective(params):
@@ -258,7 +258,7 @@ def fit(
             ]
         )
         observations, valid = shard_batch(observations)
-        codec_state = _fit_codec(codec_state, observations, valid)
+        codec_state = fit_codec_step(codec_state, observations, valid)
 
     codec_params = codec_state.params
     example_input, _ = pack_windows(training[:1], spec, config)

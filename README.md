@@ -98,6 +98,17 @@ uv run --no-sync wr antmaze-gcbc \
   --updates 1000 --eval-repeats 1 --eval-steps 100
 ```
 
+### Execute learned AntMaze plans
+
+Train masked trajectory completion on the official demonstrations and compare decoded intermediate goals with direct execution using the same frozen actor. This smoke run reuses the reset bank above. [Learned planner protocol](docs/experiments.md#run-learned-latent-planning-in-antmaze)
+
+```bash
+uv run --no-sync wr antmaze-latent \
+  --checkpoint "$run_dir/navigate" --starts "$run_dir/navigate/starts.npz" \
+  --out "$run_dir/latent" --eval-repeats 1 --eval-steps 100 \
+  --windows 128 --codec-updates 10 --predictor-updates 10 --flow-updates 10
+```
+
 ## Contributing
 
 Choose a focused change from the implementation plan and include a reproducible check. Install the MiniGrid, Craftax and OGBench extras for the full CPU test suite. [Contribution guide](CONTRIBUTING.md) · [Implementation plan](PLAN.md)

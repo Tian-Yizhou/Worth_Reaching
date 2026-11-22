@@ -2,6 +2,7 @@
 
 import json
 import sys
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from importlib.metadata import version
@@ -27,7 +28,6 @@ from worth_reaching.models.parallel import (
     single_device,
 )
 
-SCHEMA = "antmaze_gcbc_v1"
 Policy = Callable[[np.ndarray, np.ndarray], np.ndarray]
 
 
@@ -79,6 +79,8 @@ def rollout(
     start: antmaze.AntMazeStart,
     policy: Policy,
     limit: int,
+    *,
+    after_step: Callable[[np.ndarray, int], None] | None = None,
 ) -> dict[str, object]:
     observation = environment.restore(start)
     goal = start.goal.copy()
@@ -92,6 +94,8 @@ def rollout(
         )
         distance = float(np.linalg.norm(observation[:2] - goal[:2]))
         closest_distance = min(closest_distance, distance)
+        if after_step is not None:
+            after_step(observation, step)
         if success or terminated or truncated:
             break
     return {
@@ -106,6 +110,76 @@ def rollout(
     }
 
 
+def summarize_episodes(results: list[dict]) -> dict:
+    return {
+        "episodes": len(results),
+        "successes": sum(result["success"] for result in results),
+        "success_rate": float(np.mean([result["success"] for result in results])),
+        "steps": sum(result["steps"] for result in results),
+        "mean_closest_distance": float(
+            np.mean([result["closest_distance"] for result in results])
+        ),
+        "per_task": {
+            str(task): float(
+                np.mean(
+                    [result["success"] for result in results if result["task"] == task]
+                )
+            )
+            for task in antmaze.TASKS
+        },
+    }
+
+
+def paired_metrics(direct: list[dict], guided: list[dict]) -> dict:
+    pairs = list(zip(direct, guided, strict=True))
+    if any((a["task"], a["seed"]) != (b["task"], b["seed"]) for a, b in pairs):
+        raise ValueError("Paired AntMaze runs must share the same task and reset IDs")
+    outcome_pairs = Counter((a["success"], b["success"]) for a, b in pairs)
+    task_deltas = np.array(
+        [
+            np.mean(
+                [
+                    int(b["success"]) - int(a["success"])
+                    for a, b in pairs
+                    if a["task"] == task
+                ]
+            )
+            for task in antmaze.TASKS
+        ]
+    )
+    samples = np.random.default_rng(31).integers(
+        len(task_deltas), size=(2000, len(task_deltas))
+    )
+    return {
+        "both_succeeded": outcome_pairs[True, True],
+        "only_direct": outcome_pairs[True, False],
+        "only_guided": outcome_pairs[False, True],
+        "neither_succeeded": outcome_pairs[False, False],
+        "terminal_delta": float(task_deltas.mean()),
+        "terminal_delta_task_bootstrap_95": np.quantile(
+            task_deltas[samples].mean(axis=1), [0.025, 0.975]
+        ).tolist(),
+    }
+
+
+def evaluation_starts(
+    environment: antmaze.AntMaze,
+    evaluation: EvalConfig,
+    start_bank: Path | None,
+) -> list[antmaze.AntMazeStart]:
+    if start_bank is not None:
+        return antmaze.load_starts(
+            start_bank,
+            split=evaluation.split,
+            repeats=evaluation.repeats,
+            state_size=environment.state_size,
+        )
+    return [
+        environment.capture(task, seed)
+        for task, seed in antmaze.start_ids(evaluation.split, evaluation.repeats)
+    ]
+
+
 def score(
     environment: antmaze.AntMaze,
     starts: list[antmaze.AntMazeStart],
@@ -117,27 +191,7 @@ def score(
     for name, policy in policies.items():
         results = [rollout(environment, start, policy, limit) for start in starts]
         episodes.extend({"policy": name, **row} for row in results)
-        metrics[name] = {
-            "episodes": len(results),
-            "successes": sum(result["success"] for result in results),
-            "success_rate": float(np.mean([result["success"] for result in results])),
-            "steps": sum(result["steps"] for result in results),
-            "mean_closest_distance": float(
-                np.mean([result["closest_distance"] for result in results])
-            ),
-            "per_task": {
-                str(task): float(
-                    np.mean(
-                        [
-                            result["success"]
-                            for result in results
-                            if result["task"] == task
-                        ]
-                    )
-                )
-                for task in antmaze.TASKS
-            },
-        }
+        metrics[name] = summarize_episodes(results)
     return episodes, metrics
 
 
@@ -175,7 +229,7 @@ def run(
         np.float32
     )
     provenance = {
-        "schema": SCHEMA,
+        "schema": gcbc.CHECKPOINT_SCHEMA,
         "dataset": dataset,
         "dataset_url": DATASET_URL,
         "train_sha256": archive.fingerprint,
@@ -287,21 +341,7 @@ def run(
 
     environment = antmaze.AntMaze()
     try:
-        starts = (
-            antmaze.load_starts(
-                start_bank,
-                split=evaluation.split,
-                repeats=evaluation.repeats,
-                state_size=environment.state_size,
-            )
-            if start_bank is not None
-            else [
-                environment.capture(task, seed)
-                for task, seed in antmaze.start_ids(
-                    evaluation.split, evaluation.repeats
-                )
-            ]
-        )
+        starts = evaluation_starts(environment, evaluation, start_bank)
         antmaze.save_starts(out / "starts.npz", starts)
         episodes, metrics = score(
             environment, starts, {"gcbc": clone, "zero": zero}, evaluation.action_limit

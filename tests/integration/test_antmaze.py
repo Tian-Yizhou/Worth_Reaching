@@ -1,3 +1,4 @@
+import gzip
 import json
 import subprocess
 
@@ -37,6 +38,20 @@ def test_hindsight_sampling_respects_episode_endpoints(tmp_path):
     limited = load_antmaze_archive(path, max_trajectories=1)
     assert limited.observations.shape == (4, 29)
     assert limited.sample(rng, 8).actions.shape == (8, 8)
+    windows = archive.sample_windows(rng, 30, history=4, queries=1, max_horizon=3)
+    context = windows.context
+    initial = context.observations[:, -1, 0]
+    assert np.array_equal(initial <= 3, context.goal[:, 0] <= 3)
+    np.testing.assert_array_equal(
+        windows.targets[:, :, 0], initial[:, None] + context.offsets
+    )
+    np.testing.assert_array_equal(context.goal[:, 0], initial + context.remaining)
+    assert (context.offsets > 0).all()
+    assert (context.offsets < context.remaining[:, None]).all()
+    begin = np.where(initial <= 3, 0, 4)
+    expected = initial[:, None] + np.arange(-3, 1)
+    np.testing.assert_array_equal(context.present, expected >= begin[:, None])
+    assert (context.incoming_actions[expected <= begin[:, None]] == 0).all()
 
 
 def test_antmaze_cli_resumes_and_shares_saved_starts(tmp_path):
@@ -95,6 +110,87 @@ def test_antmaze_cli_resumes_and_shares_saved_starts(tmp_path):
         == 5
     )
 
+    waypoints = tmp_path / "waypoints"
+    subprocess.run(
+        [
+            "wr",
+            "antmaze-waypoints",
+            "--checkpoint",
+            continued,
+            "--starts",
+            starts_path,
+            "--eval-repeats",
+            "1",
+            "--eval-steps",
+            "2",
+            "--waypoint-steps",
+            "1",
+            "--out",
+            waypoints,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    paired = json.loads((waypoints / "episodes.json").read_text())
+    baseline = json.loads((continued / "episodes.json").read_text())
+    assert paired["direct"] == [
+        {key: value for key, value in row.items() if key != "policy"}
+        for row in baseline
+        if row["policy"] == "gcbc"
+    ]
+    assert all(
+        row["attempts"][0]["outcome"] == "timeout" for row in paired["waypoints"]
+    )
+
+    latent = tmp_path / "latent"
+    subprocess.run(
+        [
+            "wr",
+            "antmaze-latent",
+            "--checkpoint",
+            continued,
+            "--starts",
+            starts_path,
+            "--data-dir",
+            tmp_path,
+            "--eval-repeats",
+            "1",
+            "--eval-steps",
+            "6",
+            "--windows",
+            "12",
+            "--queries",
+            "2",
+            "--candidates",
+            "2",
+            "--codec-updates",
+            "1",
+            "--predictor-updates",
+            "1",
+            "--flow-updates",
+            "1",
+            "--out",
+            latent,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    episodes = json.loads((latent / "episodes.json").read_text())
+    assert len(episodes["direct"]) == len(episodes["latent"]) == 5
+    assert all(
+        (a["task"], a["seed"]) == (b["task"], b["seed"])
+        for a, b in zip(episodes["direct"], episodes["latent"], strict=True)
+    )
+    with gzip.open(latent / "plans.jsonl.gz", "rt", encoding="utf-8") as stream:
+        plans = [json.loads(line) for line in stream]
+    assert len(plans) == sum(episode["plans"] for episode in episodes["latent"])
+    assert plans[0]["step"] == 0
+    assert plans[0]["executed_actions"] == plans[0]["query_offsets"][0] == 2
+    assert np.asarray(plans[0]["decoded_routes"]).shape == (2, 2, 29)
+    assert np.asarray(plans[0]["latent_routes"]).shape == (2, 2, 16)
+
     environment = antmaze.AntMaze()
     try:
         bank = antmaze.load_starts(
@@ -136,3 +232,47 @@ def test_official_success_on_last_action_overrides_timeout():
         return np.zeros(8)
 
     assert rollout(Episode(), start, policy, 1)["outcome"] == "success"
+
+
+def test_waypoint_plan_keeps_corners_and_excludes_terminal_goal():
+    pytest.importorskip("ogbench")
+    np = pytest.importorskip("numpy")
+    from worth_reaching.evaluation.antmaze_waypoints import (
+        shortest_cells,
+        waypoint_cells,
+    )
+
+    distances = np.array([[3, 2, 1, 0], [4, 3, 2, 1]])
+    path = shortest_cells(distances, (1, 0), (0, 3))
+    assert path == [(1, 0), (0, 0), (0, 1), (0, 2), (0, 3)]
+    assert waypoint_cells(path, 2) == [(0, 0), (0, 2)]
+    assert waypoint_cells([(0, 0), (0, 1)], 1) == []
+
+
+def test_waypoint_controller_advances_on_arrival_and_falls_back_on_timeout():
+    pytest.importorskip("ogbench")
+    np = pytest.importorskip("numpy")
+    from worth_reaching.evaluation.antmaze_waypoints import (
+        FollowWaypoints,
+        WaypointConfig,
+    )
+
+    first, second, terminal = np.array([(4, 0), (8, 0), (12, 0)])
+    follower = FollowWaypoints(
+        lambda observation, goal: goal, [first, second], WaypointConfig(1, 2, 1)
+    )
+    current = np.array([0, 0])
+    np.testing.assert_array_equal(follower(current, terminal), first)
+    follower.observe(first, 1)
+    np.testing.assert_array_equal(follower(first, terminal), second)
+    follower.observe(first, 2)
+    np.testing.assert_array_equal(follower(first, terminal), second)
+    follower.observe(first, 3)
+    np.testing.assert_array_equal(follower(first, terminal), terminal)
+    follower.finish(3)
+    assert [
+        (x["outcome"], x["start_step"], x["end_step"]) for x in follower.attempts
+    ] == [
+        ("arrived", 0, 1),
+        ("timeout", 1, 3),
+    ]
