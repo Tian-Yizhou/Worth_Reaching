@@ -38,6 +38,16 @@ cat "$run_dir/summary.json"
 
 The default recipe records four random-policy episodes of at most 32 actions each. Each run saves the public trajectories, world splits and terminal outcomes under the repository's Git-ignored `results/` directory.
 
+### Prepare masked trajectory windows
+
+Point the command at a completed craft-and-survive collection with successful demonstrations. The export gives each successful training or development episode a window at its initial observation and additional windows at sampled steps. Mask lengths vary with the available action budget. [Window format and loader](docs/experiments.md#prepare-masked-trajectory-windows)
+
+```bash
+collection=results/datasets/your-craft-and-survive-collection
+out="$(mktemp -d results/completion.XXXXXX)/windows"
+uv run --no-sync wr prepare-windows --collection "$collection" --out "$out" --seed 7
+```
+
 ### Longer server runs
 
 The experiment guide covers matched expert and random collection, artifact locations, and selection on shared banks of prospective attempts. [Running experiments](docs/experiments.md)

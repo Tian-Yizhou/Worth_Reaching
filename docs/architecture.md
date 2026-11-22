@@ -19,10 +19,10 @@ The `src/worth_reaching/` package groups code by responsibility.
 | Package | Current responsibility |
 | --- | --- |
 | `envs/` | Versioned simulator adaptations and terminal task rules |
-| `data/` | Collect complete public trajectories, validate their manifests and stream episodes by world split |
+| `data/` | Collect complete public trajectories, validate world splits and export masked training and development windows |
 | `policies/` | Recurrent expert inference from public observations |
 | `evaluation/` | Replay, matched continuations and comparisons of shared candidate banks |
-| `cli.py` | Connect configurations to `pilot`, `collect` and `attempt-compare` |
+| `cli.py` | Connect configurations to `pilot`, `collect`, `prepare-windows` and `attempt-compare` |
 
 The trajectory completion model will use public data from `data/`. Its executor will consume public observations and emit primitive actions. Evaluation owns simulator snapshots and restores them for matched repeats. [Trajectory completion design](trajectory-completion.md)
 
@@ -49,6 +49,12 @@ Random and PPO-RNN collection share the same environment and transition seed str
 `data/craftax_trajectories.py` loads completed random and expert collections through the same interface. It validates task rules and verifies episode IDs and split assignments against the original world seeds. Its split iterator yields complete public episode records without loading a policy checkpoint or constructing a simulator.
 
 `evaluation/craftax.py` reconstructs a live start from recorded actions and verifies each replayed observation. It returns the recurrent memory immediately before the current observation. A continuation can act directly or run a declared action prefix first. Forced actions still advance policy memory from each public observation. Match repeat keys across alternatives to compare outcomes on the same transition and policy random streams.
+
+## Masked trajectory window contract
+
+For a successful craft-and-survive episode with budget `B`, index observations from `o[0]` and let action `a[t]` produce `o[t]`. A window starts at an observed step `s` and queries the next `L` positions, with `s + L < B`. The input contains observations through `o[s]`, actions through `a[s]`, the terminal task and the remaining budget `B - s`. The target contains observations and incoming actions for steps `s + 1` through `s + L`. The query offsets `1..L` describe which positions to predict. They do not depend on when the pickaxe was crafted.
+
+Each successful episode contributes a window from the reset and up to seven later starts by default. The seed and world ID determine the sampled starts and lengths. Each export inherits the archive's world split. Train and development exports use terminal outcomes to select demonstrations. Model inputs contain the public task descriptor. The training shard can additionally supply `o[B]` through an explicit endpoint-example option. Development windows use the task descriptor alone. The final action is outside the windows, and the test split stays in the source archive for evaluation. [Window export and loader](experiments.md#prepare-masked-trajectory-windows)
 
 ## Shared-attempt evaluation contract
 

@@ -10,6 +10,8 @@ Learn to complete missing segments of a trajectory in latent space. At deploymen
 | 4. Improve proposals with execution feedback | Compare candidate attempts from the same starting history under a shared executor and continuation. Use terminal outcomes to rerank candidates and update the generator. | Hold the reranker fixed and measure whether the updated generator proposes more viable low-support targets on held-out worlds. |
 | 5. Compare closed-loop planners | Run controlled comparisons with released baselines such as Diffuser. Evaluate our method on visual tasks from HDFlow and cite its published results, with HorizonFlow as a supplementary comparison where protocols align. Evaluate goal-only planning and planning given a rough initial plan. | Report paired terminal success and reliable low-support target discovery for controlled comparisons. Identify published scores and document protocol alignment. Use shared-executor and shared-bank comparisons to locate gains. |
 
+Milestone 1 exports Craftax windows through `wr prepare-windows`. Its output supplies the public inputs and masked targets for milestone 2. [Window export and loader](docs/experiments.md#prepare-masked-trajectory-windows)
+
 ## Evaluation protocol
 
 Keep exploratory development worlds separate from test worlds. Freeze decision rules before the final comparison. Compare methods on matched starts and independent repeat streams. When isolating proposal quality, share the executor, terminal objective and candidate budget. Record all environment interactions used for training, proposal updates and evaluation. [Architecture](docs/architecture.md) · [Running experiments](docs/experiments.md)

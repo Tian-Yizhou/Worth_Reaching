@@ -35,6 +35,15 @@ def _attempt_compare(args: argparse.Namespace) -> dict[str, object]:
     return compare_attempt_banks(args.train, args.dev, args.test, args.out, args.seed)
 
 
+def _prepare_windows(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.data.completion import WindowConfig, prepare_craftax_windows
+
+    config = WindowConfig(
+        args.seed, args.windows_per_episode, args.min_span, args.max_span
+    )
+    return prepare_craftax_windows(args.collection, args.out, config)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="wr")
     commands = parser.add_subparsers(required=True)
@@ -55,6 +64,16 @@ def main() -> None:
     )
     collection.add_argument("--expert-checkpoint", type=Path)
     collection.set_defaults(run=_collect, extra="craftax")
+    windows = commands.add_parser(
+        "prepare-windows", help="Export masked windows from a Craftax collection"
+    )
+    windows.add_argument("--collection", type=Path, required=True)
+    windows.add_argument("--out", type=Path, required=True)
+    windows.add_argument("--seed", type=int, default=0)
+    windows.add_argument("--windows-per-episode", type=int, default=8)
+    windows.add_argument("--min-span", type=int, default=1)
+    windows.add_argument("--max-span", type=int)
+    windows.set_defaults(run=_prepare_windows, extra="craftax")
     comparison = commands.add_parser(
         "attempt-compare", help="Fit and compare shared-bank selectors"
     )
