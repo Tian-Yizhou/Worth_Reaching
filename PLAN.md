@@ -24,6 +24,8 @@ Milestone 5 starts with state AntMaze-Large. `wr antmaze-gcbc` reads the officia
 
 `wr pointmaze-latent` runs the shared completion model on the maintained Maze2D U-Maze, Medium and Large tasks. The pilots pair direct execution and decoded latent targets using Diffuser's position and velocity controller. A controlled Diffuser comparison will use the same archive, environment and resets for each task. [Maze2D protocol](docs/experiments.md#run-the-diffuser-maze2d-pilots)
 
+`wr kuka-latent` uses Diffuser's released manipulation clips and Kuka simulator to test complete four-block orders. The pilot compares tracking decoded forecasts and sampled trajectories from matched starts and scores the physical tower at the action limit. [Conditional stacking protocol](docs/experiments.md#run-conditional-kuka-stacking)
+
 ## Evaluation protocol
 
 Keep exploratory development worlds separate from test worlds. Freeze decision rules before the final comparison. Compare methods on matched starts and independent repeat streams. When isolating proposal quality, share the executor, terminal objective and candidate budget. Record all environment interactions used for training, proposal updates and evaluation. [Architecture](docs/architecture.md) · [Running experiments](docs/experiments.md)

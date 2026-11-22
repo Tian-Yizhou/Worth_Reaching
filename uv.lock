@@ -2593,6 +2593,12 @@ wheels = [
 ]
 
 [[package]]
+name = "pybullet"
+version = "3.2.7"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/95/b9a98cd4ed948d4f25a7d0b13cb0c1f87e58dc6d113be9e18940641eb25f/pybullet-3.2.7.tar.gz", hash = "sha256:042879db8d101ac7590dee475fc6aded508b85fe1273fdbbfde1d88bd200e14f", size = 80508379, upload-time = "2025-01-30T00:34:00.527Z" }
+
+[[package]]
 name = "pycparser"
 version = "3.12"
 source = { registry = "https://pypi.org/simple" }
@@ -3308,6 +3314,13 @@ pointmaze = [
     { name = "mujoco" },
     { name = "optax" },
 ]
+stacking = [
+    { name = "flax" },
+    { name = "gymnasium" },
+    { name = "jax" },
+    { name = "optax" },
+    { name = "pybullet" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -3321,11 +3334,14 @@ requires-dist = [
     { name = "flax", marker = "extra == 'craftax'", specifier = ">=0.12,<1" },
     { name = "flax", marker = "extra == 'ogbench'", specifier = ">=0.12,<1" },
     { name = "flax", marker = "extra == 'pointmaze'", specifier = ">=0.12,<1" },
+    { name = "flax", marker = "extra == 'stacking'", specifier = ">=0.12,<1" },
     { name = "gymnasium", marker = "extra == 'minigrid'", specifier = ">=1.0,<2" },
+    { name = "gymnasium", marker = "extra == 'stacking'", specifier = ">=1.0,<2" },
     { name = "gymnasium-robotics", marker = "extra == 'pointmaze'", specifier = "==1.4.2" },
     { name = "jax", marker = "extra == 'craftax'", specifier = ">=0.4.26,<1" },
     { name = "jax", marker = "extra == 'ogbench'", specifier = ">=0.4.26,<1" },
     { name = "jax", marker = "extra == 'pointmaze'", specifier = ">=0.4.26,<1" },
+    { name = "jax", marker = "extra == 'stacking'", specifier = ">=0.4.26,<1" },
     { name = "jax", extras = ["cuda12"], marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'cuda12') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12')", specifier = ">=0.4.26,<1" },
     { name = "minari", extras = ["hdf5", "hf"], marker = "extra == 'pointmaze'", specifier = "==0.5.4" },
     { name = "minigrid", marker = "extra == 'minigrid'", specifier = "==3.2.0" },
@@ -3335,9 +3351,11 @@ requires-dist = [
     { name = "optax", marker = "extra == 'craftax'", specifier = ">=0.2,<1" },
     { name = "optax", marker = "extra == 'ogbench'", specifier = ">=0.2,<1" },
     { name = "optax", marker = "extra == 'pointmaze'", specifier = ">=0.2,<1" },
+    { name = "optax", marker = "extra == 'stacking'", specifier = ">=0.2,<1" },
     { name = "orbax-checkpoint", marker = "extra == 'craftax'", specifier = ">=0.12,<1" },
+    { name = "pybullet", marker = "extra == 'stacking'", specifier = "==3.2.7" },
 ]
-provides-extras = ["minigrid", "craftax", "ogbench", "pointmaze", "cuda12"]
+provides-extras = ["minigrid", "craftax", "ogbench", "pointmaze", "stacking", "cuda12"]
 
 [package.metadata.requires-dev]
 dev = [

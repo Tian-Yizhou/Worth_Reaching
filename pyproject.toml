@@ -11,6 +11,7 @@ minigrid = ["gymnasium>=1.0,<2", "minigrid==3.2.0"]
 craftax = ["craftax==1.7.0", "flax>=0.12,<1", "jax>=0.4.26,<1", "optax>=0.2,<1", "orbax-checkpoint>=0.12,<1"]
 ogbench = ["ogbench==1.1.5", "mujoco==3.3.7", "flax>=0.12,<1", "jax>=0.4.26,<1", "optax>=0.2,<1"]
 pointmaze = ["gymnasium-robotics==1.4.2", "minari[hdf5,hf]==0.5.4", "mujoco==3.3.7", "flax>=0.12,<1", "jax>=0.4.26,<1", "optax>=0.2,<1"]
+stacking = ["gymnasium>=1.0,<2", "pybullet==3.2.7", "flax>=0.12,<1", "jax>=0.4.26,<1", "optax>=0.2,<1"]
 cuda12 = ["jax[cuda12]>=0.4.26,<1; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')"]
 
 [project.scripts]

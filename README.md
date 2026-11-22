@@ -120,6 +120,16 @@ run_dir="$(mktemp -d results/pointmaze-diffuser.XXXXXX)"
 uv run --no-sync wr pointmaze-latent --task umaze --out "$run_dir/umaze"
 ```
 
+### Run conditional Kuka stacking
+
+Install the `stacking` extra alongside your existing extras. The pilot learns from Diffuser's released demonstrations and tests four-block orders on the author-released simulator. [Setup and scoring protocol](docs/experiments.md#run-conditional-kuka-stacking)
+
+```bash
+bash scripts/prepare_diffuser_kuka.sh
+run_dir="$(mktemp -d results/diffuser-kuka.pilot.XXXXXX)"
+uv run --no-sync wr kuka-latent --out "$run_dir/conditional"
+```
+
 ## Contributing
 
 Choose a focused change from the implementation plan and include a reproducible check. Install the environment extras for the full CPU test suite. [Contribution guide](CONTRIBUTING.md) · [Implementation plan](PLAN.md)

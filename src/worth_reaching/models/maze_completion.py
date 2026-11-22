@@ -179,12 +179,29 @@ class LearnedCompletion:
             steps=12,
         )
 
-    def validate(self, batch: MaskedBatch) -> dict[str, float]:
+    def validate(
+        self, batch: MaskedBatch, *, compare_xy: bool = True
+    ) -> dict[str, float]:
         features, forecast = self.forecast(batch.context)
         target = encode_observations(
             self.codec, self.weights["codec"], (batch.targets - self.mean) / self.scale
         )
         reconstructed = self.decode(target)
+        metrics = {
+            "normalized_reconstruction_mse": float(
+                np.mean(np.square((reconstructed - batch.targets) / self.scale))
+            ),
+            "latent_prediction_mse": float(jnp.square(forecast - target).mean()),
+        }
+        if not compare_xy:
+            return {
+                **metrics,
+                "normalized_prediction_mse": float(
+                    np.mean(
+                        np.square((self.decode(forecast) - batch.targets) / self.scale)
+                    )
+                ),
+            }
         replay_xy = batch.targets[..., :2]
         samples = self._sample(
             features,
@@ -200,13 +217,10 @@ class LearnedCompletion:
             batch.context.goal[:, None, :2] - start
         )
         return {
-            "normalized_reconstruction_mse": float(
-                np.mean(np.square((reconstructed - batch.targets) / self.scale))
-            ),
+            **metrics,
             "reconstructed_xy_mean_error": float(
                 np.linalg.norm(reconstructed[..., :2] - replay_xy, axis=-1).mean()
             ),
-            "latent_prediction_mse": float(jnp.square(forecast - target).mean()),
             "decoded_xy_mean_error": float(
                 np.linalg.norm(
                     self.decode(forecast)[..., :2] - replay_xy, axis=-1

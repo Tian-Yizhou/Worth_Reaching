@@ -1,0 +1,36 @@
+diff --git a/gym_stacking/env.py b/gym_stacking/env.py
+index 884860f..0f321d6 100644
+--- a/gym_stacking/env.py
++++ b/gym_stacking/env.py
+@@ -1,4 +1,2 @@
+-import gym
+-from gym import spaces, logger
+-from gym.utils import seeding
+-from easydict import EasyDict
++import gymnasium as gym
++from gymnasium import spaces
+@@ -16 +13,0 @@ import numpy as np
+-from d4rl import offline_env
+@@ -160 +157 @@ class StackEnv(gym.Env):
+-        self.client = connect()
++        self.client = connect(use_gui=False)
+@@ -338,10 +334,0 @@ class StackEnv(gym.Env):
+-
+-
+-class OfflineStackEnv(StackEnv, offline_env.OfflineEnv):
+-    def __init__(self, conditional=False, rearrangment=False, **kwargs):
+-        StackEnv.__init__(self, conditional=conditional, rearrangment=rearrangment)
+-        offline_env.OfflineEnv.__init__(self, **kwargs)
+-
+-def get_stacking_env(conditional=False, rearrangment=False, dataset_url="", **kwargs):
+-    env = OfflineStackEnv(conditional=conditional, rearrangment=rearrangment, dataset_url=dataset_url, **kwargs)
+-    return env
+diff --git a/gym_stacking/utils.py b/gym_stacking/utils.py
+index 962f8e1..2d3a39e 100644
+--- a/gym_stacking/utils.py
++++ b/gym_stacking/utils.py
+@@ -3,0 +4 @@ import collections
++import collections.abc
+@@ -321 +322 @@ def safe_sample(collection, k=1):
+-class OrderedSet(collections.OrderedDict, collections.MutableSet):
++class OrderedSet(collections.OrderedDict, collections.abc.MutableSet):

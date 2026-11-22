@@ -184,6 +184,29 @@ def _pointmaze_latent(args: argparse.Namespace) -> dict[str, object]:
     )
 
 
+def _kuka_latent(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.kuka import run
+    from worth_reaching.models.maze_completion import CompletionConfig
+
+    return run(
+        args.source_dir,
+        args.data_dir,
+        args.out,
+        CompletionConfig(
+            seed=args.seed,
+            windows=args.windows,
+            max_horizon=256,
+            latent_size=24,
+            codec_updates=args.codec_updates,
+            predictor_updates=args.predictor_updates,
+            flow_updates=args.flow_updates,
+        ),
+        split=args.eval_split,
+        repeats=args.eval_repeats,
+        limit=args.eval_steps,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="wr")
     parser.add_argument(
@@ -365,6 +388,28 @@ def main() -> None:
         help="Action limit (defaults to the official task limit)",
     )
     pointmaze.set_defaults(run=_pointmaze_latent, extra="pointmaze", uses_jax=True)
+    kuka = commands.add_parser(
+        "kuka-latent",
+        help="Train and evaluate latent completion on conditional Kuka stacking",
+    )
+    kuka.add_argument(
+        "--source-dir", type=Path, default=Path("results/external/diffuser-kuka")
+    )
+    kuka.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("results/datasets/diffuser-kuka/kuka_dataset"),
+    )
+    kuka.add_argument("--out", type=Path, required=True)
+    kuka.add_argument("--seed", type=int, default=7)
+    kuka.add_argument("--windows", type=int, default=4000)
+    kuka.add_argument("--codec-updates", type=int, default=250)
+    kuka.add_argument("--predictor-updates", type=int, default=600)
+    kuka.add_argument("--flow-updates", type=int, default=300)
+    kuka.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    kuka.add_argument("--eval-repeats", type=int, default=4)
+    kuka.add_argument("--eval-steps", type=int, default=384)
+    kuka.set_defaults(run=_kuka_latent, extra="stacking", uses_jax=True)
     comparison = commands.add_parser(
         "attempt-compare", help="Fit and compare shared-bank selectors"
     )
@@ -392,6 +437,7 @@ def main() -> None:
             "minari",
             "h5py",
             "gymnasium_robotics",
+            "pybullet",
             "numpy",
             "ogbench",
             "optax",

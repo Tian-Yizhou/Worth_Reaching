@@ -13,6 +13,8 @@ Use Python 3.12 or newer and run from the repository root. The [quick start](../
 | `results/antmaze-latent.*/` | Completion weights, sampled and decoded plans, and paired terminal outcomes |
 | `results/antmaze-waypoints.*/` | Paired direct and oracle waypoint execution outcomes |
 | `results/pointmaze-diffuser.*/` | PointMaze archive splits, decoded plans, executed trajectories and paired outcomes |
+| `results/diffuser-kuka.pilot.*/` | Conditional stacking clip splits, decoded plans, executed states and tower scores |
+| `results/benchmark-suite.*/` | Per-task development runs and logs from the overnight launcher |
 | `results/checkpoints/` | Policy and model weights |
 | `results/external/` | Isolated benchmark source trees and environments |
 | `results/_archive/` | Archived experiment runs, code snapshots and path maps |
@@ -214,3 +216,20 @@ done
 Include `--extra pointmaze` alongside any installed extras you want to keep, including `--extra cuda12` for GPU. Each Minari archive contains a continuing collection. The loader uses the first 80% of episodes by ID for fitting, skips the boundary episode and holds out the suffix for offline reconstruction and prediction diagnostics. The evaluator uses paired seeded resets on the fixed-goal, continuing task. Both arms use the task's action limit and the same position and velocity controller. Use `--eval-steps` for a shorter run. Direct execution tracks the terminal goal. Latent execution uses the earliest decoded state of the first sampled route and replans when the queried time offset elapses. Terminal success means the native success event occurred by the action limit. Sparse return is summed across the whole episode, including success steps. Use `--eval-split test` after fixing the recipe.
 
 The run stores the data hashes and versions in `manifest.json`, archive episode IDs in `split.json`, sampled latent and decoded routes in `plans.jsonl.gz`, executed public states in `trajectories.npz`, and scores in `episodes.json` and `summary.json`.
+
+## Run conditional Kuka stacking
+
+Install the locked `stacking` extra alongside your existing extras. PyBullet builds from source on Linux with CPython 3.12, using a C/C++ compiler and Python development headers. A uv-managed Python 3.12 installation supplies those headers when the system installation lacks them.
+
+```bash
+uv sync --locked --group dev --extra minigrid --extra craftax --extra ogbench --extra pointmaze --extra stacking --extra cuda12
+bash scripts/prepare_diffuser_kuka.sh
+run_dir="$(mktemp -d results/diffuser-kuka.pilot.XXXXXX)"
+uv run --no-sync wr kuka-latent --out "$run_dir/conditional"
+```
+
+The setup script pins the author's `kuka` branch, applies a compatibility patch for Python 3.12 and headless PyBullet, and verifies the archive checksum. The loader uses the released 39-coordinate state clips, keeps every second frame and caps each clip at 300 frames, matching the author's loader. It splits complete files before sampling windows. Each clip can show an individual placement in a partly completed scene. At deployment, the goal specifies a complete four-block order. The goal encoding leaves horizontal translation free and includes block positions without joint angles or grasp flags. [Author release and setup](https://github.com/jannerm/diffuser/tree/kuka) · [Released trajectory loader](https://github.com/jannerm/diffuser/blob/kuka/denoising_diffusion_pytorch/datasets/tamp.py)
+
+Both arms use the same reset, complete terminal order and executor. One follows the decoded forecast and the other follows the first sampled route, taking the earliest queried state and replanning at its time offset. Each control cycle uses ten PyBullet simulation steps. The evaluator uses 384 control cycles, the author's three 128-step planning chunks. At the deadline all three adjacent pairs must be in the requested order, in physical contact, and released from the gripper. The upstream conditional placement score is logged separately. `--eval-split test` selects disjoint reset seeds. [Author conditional evaluator](https://github.com/jannerm/diffuser/blob/kuka/scripts/conditional_kuka_planning_eval.py)
+
+The run records `manifest.json`, the clip split and hashes, latent and decoded plans, public trajectories, and both terminal metrics. The two arms measure the effect of proposal sampling within the shared latent planner. The author's released Diffuser checkpoint can supply a future same-environment comparison.
