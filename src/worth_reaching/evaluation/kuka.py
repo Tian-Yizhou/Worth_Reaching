@@ -172,16 +172,17 @@ def run(
         scale = np.maximum(
             train.observations.std(axis=0, dtype=np.float64), 1e-3
         ).astype(np.float32)
+        heldout = sample_windows(
+            validation, np.random.default_rng(801), 512, **settings
+        )
         model = fit(
             batch,
+            heldout,
             mean,
             scale,
             config,
             out / "checkpoints",
             validate_resume(out, resume),
-        )
-        heldout = sample_windows(
-            validation, np.random.default_rng(801), 512, **settings
         )
         metrics = model.validate(heldout, compare_xy=False)
         write_json(out / "validation.json", metrics)

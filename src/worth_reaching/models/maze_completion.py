@@ -11,6 +11,7 @@ from worth_reaching.data.maze_windows import CompletionContext, MaskedBatch
 from worth_reaching.models import flow
 from worth_reaching.models.codec import ObservationCodec, mlp, reconstruction
 from worth_reaching.models.training import (
+    PredictorStopping,
     RandomBatches,
     regression,
     stage_resume,
@@ -35,6 +36,7 @@ class CompletionConfig:
     predictor_updates: int = 1200
     flow_updates: int = 700
     candidates: int = 4
+    predictor_stopping: PredictorStopping = PredictorStopping()
 
     def __post_init__(self) -> None:
         if (
@@ -209,6 +211,7 @@ class LearnedCompletion:
 
 def fit(
     training: MaskedBatch,
+    validation: MaskedBatch,
     mean: np.ndarray,
     scale: np.ndarray,
     config: CompletionConfig,
@@ -229,8 +232,12 @@ def fit(
         resume=stage_resume(resume, "codec"),
     )
     features = public_features(codec, training.context, mean, scale, config.max_horizon)
+    validation_features = public_features(
+        codec, validation.context, mean, scale, config.max_horizon
+    )
     with torch.no_grad():
         encoded_targets = codec.encode(targets)
+        validation_targets = codec.encode(tensor((validation.targets - mean) / scale))
     torch.manual_seed(stream_seed(config.seed, 602))
     predictor = train_stage(
         LatentTrajectory(features.shape[-1], config),
@@ -242,6 +249,8 @@ def fit(
         learning_rate=0.001,
         out=out / "predictor",
         resume=stage_resume(resume, "predictor"),
+        validation=(validation_features, validation_targets),
+        stopping=config.predictor_stopping,
     )
     with torch.no_grad():
         forecast = predictor(features)

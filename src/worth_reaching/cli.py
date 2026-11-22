@@ -58,6 +58,20 @@ def _prepare_windows(args: argparse.Namespace) -> dict[str, object]:
     return prepare_craftax_windows(args.collection, args.out, config)
 
 
+def _predictor_stopping(args: argparse.Namespace):
+    from worth_reaching.models.training import PredictorStopping
+
+    settings = {
+        key: value
+        for key, value in (
+            ("val_every", args.predictor_val_every),
+            ("patience", args.predictor_patience),
+        )
+        if value is not None
+    }
+    return PredictorStopping(**settings)
+
+
 def _train_completion(args: argparse.Namespace) -> dict[str, object]:
     from worth_reaching.evaluation.completion import run_completion_training
     from worth_reaching.models.completion import TrainingConfig
@@ -68,6 +82,7 @@ def _train_completion(args: argparse.Namespace) -> dict[str, object]:
         updates=args.updates,
         history_length=args.history_length,
         queries_per_window=args.queries_per_window,
+        predictor_stopping=_predictor_stopping(args),
     )
     return run_completion_training(
         args.out,
@@ -156,6 +171,7 @@ def _antmaze_latent(args: argparse.Namespace) -> dict[str, object]:
         codec_updates=args.codec_updates,
         predictor_updates=args.predictor_updates,
         flow_updates=args.flow_updates,
+        predictor_stopping=_predictor_stopping(args),
         candidates=args.candidates,
     )
     evaluation = EvalConfig(args.eval_split, args.eval_repeats, args.eval_steps)
@@ -186,6 +202,7 @@ def _pointmaze_latent(args: argparse.Namespace) -> dict[str, object]:
             codec_updates=args.codec_updates,
             predictor_updates=args.predictor_updates,
             flow_updates=args.flow_updates,
+            predictor_stopping=_predictor_stopping(args),
         ),
         task_name=args.task,
         split=args.eval_split,
@@ -211,6 +228,7 @@ def _kuka_latent(args: argparse.Namespace) -> dict[str, object]:
             codec_updates=args.codec_updates,
             predictor_updates=args.predictor_updates,
             flow_updates=args.flow_updates,
+            predictor_stopping=_predictor_stopping(args),
         ),
         split=args.eval_split,
         repeats=args.eval_repeats,
@@ -235,6 +253,7 @@ def _manipulation_latent(args: argparse.Namespace) -> dict[str, object]:
             codec_updates=args.codec_updates,
             predictor_updates=args.predictor_updates,
             flow_updates=args.flow_updates,
+            predictor_stopping=_predictor_stopping(args),
         ),
         ExecutorConfig(updates=args.executor_updates),
         split=args.eval_split,
@@ -499,6 +518,17 @@ def main() -> None:
     for command in (training, routes, feedback, latent, pointmaze, kuka, scene, puzzle):
         command.add_argument(
             "--resume", type=Path, help="Continue from a compatible Lightning run"
+        )
+    for command in (training, latent, pointmaze, kuka, scene, puzzle):
+        command.add_argument(
+            "--predictor-val-every",
+            type=int,
+            help="Predictor updates between development checks",
+        )
+        command.add_argument(
+            "--predictor-patience",
+            type=int,
+            help="Development checks without improvement before stopping",
         )
     args = parser.parse_args()
 

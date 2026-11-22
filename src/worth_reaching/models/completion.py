@@ -21,6 +21,7 @@ from worth_reaching.models.codec import (
     reconstruction,
 )
 from worth_reaching.models.training import (
+    PredictorStopping,
     RandomBatches,
     restore_weights,
     stage_resume,
@@ -44,6 +45,7 @@ class TrainingConfig:
     width: int = 64
     latent_size: int = 16
     learning_rate: float = 0.003
+    predictor_stopping: PredictorStopping = PredictorStopping()
 
     def __post_init__(self) -> None:
         if not 0 <= self.seed < 2**32:
@@ -213,6 +215,7 @@ def prediction_loss(model, batch):
 
 def fit(
     training: Sequence[CompletionExample],
+    validation: Sequence[CompletionExample],
     spec: ModelSpec,
     config: TrainingConfig,
     out: Path,
@@ -235,14 +238,16 @@ def fit(
         resume=stage_resume(resume, "codec"),
     )
     inputs, targets = pack_windows(training, spec, config)
+    validation_inputs, validation_targets = pack_windows(validation, spec, config)
     with torch.no_grad():
         encoded = codec.encode(tensor(targets))
+        validation_encoded = codec.encode(tensor(validation_targets))
     torch.manual_seed(stream_seed(config.seed, 1))
     initial = LatentPredictor(spec, config.width, config.latent_size)
     predictors = []
-    for stage, public in (
-        ("conditioned", inputs),
-        ("goal_blind", inputs.without_goal()),
+    for stage, public, heldout in (
+        ("conditioned", inputs, validation_inputs),
+        ("goal_blind", inputs.without_goal(), validation_inputs.without_goal()),
     ):
         arrays = (*predictor_inputs(codec, public), encoded)
         predictors.append(
@@ -254,6 +259,8 @@ def fit(
                 learning_rate=config.learning_rate,
                 out=out / stage,
                 resume=stage_resume(resume, stage),
+                validation=(*predictor_inputs(codec, heldout), validation_encoded),
+                stopping=config.predictor_stopping,
             )
         )
     return codec, *predictors
@@ -296,7 +303,12 @@ class FrozenCompletion:
         spec = ModelSpec(
             **{**manifest["model"], "goals": tuple(manifest["model"]["goals"])}
         )
-        config = TrainingConfig(**manifest["config"])
+        settings = manifest["config"]
+        if "predictor_stopping" in settings:
+            settings["predictor_stopping"] = PredictorStopping(
+                **settings["predictor_stopping"]
+            )
+        config = TrainingConfig(**settings)
         values = serialization.msgpack_restore(
             (directory / "weights.msgpack").read_bytes()
         )

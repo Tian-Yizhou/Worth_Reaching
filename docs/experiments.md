@@ -50,9 +50,15 @@ Indices are zero-based within any existing `CUDA_VISIBLE_DEVICES` list. The conf
 
 The completion predictor, route flow, feedback update and GCBC trainer use Lightning's single-host DDP. Batch size is global, so each update uses the same examples on one or more devices. Run manifests record the framework, backend, device count and visibility mask. Simulator rollout loops execute serially. [Lightning distributed strategies](https://lightning.ai/docs/pytorch/stable/reference/accelerators/gpu_intermediate)
 
+## Select a predictor checkpoint
+
+The predictor monitors `val_latent_mse`, the mean squared error at valid masked query positions in fixed development windows encoded by the frozen codec. Set `--predictor-val-every` to change the default interval of 200 updates and `--predictor-patience` to change the default of five validation checks without improvement. The update budget caps training. A budget shorter than the interval is validated at its last update. The grid and Craftax goal-conditioned and goal-blind predictors share validation windows and stopping settings and select their checkpoints independently. [Lightning EarlyStopping](https://lightning.ai/docs/pytorch/stable/optional-api/api/lightning.pytorch.callbacks.EarlyStopping)
+
+The predictor checkpoint directory contains `best.ckpt`, selected by validation error, and `selection.json`, which records the best score, the selected update, the actual final update and the stop reason. Continuous benchmarks use the best predictor's forecasts to fit the route generator. Grid route training uses the exported best goal-conditioned predictor. Test rollouts stay outside checkpoint selection. [Lightning ModelCheckpoint](https://lightning.ai/docs/pytorch/stable/optional-api/api/lightning.pytorch.callbacks.ModelCheckpoint)
+
 ## Resume training
 
-Each stage writes Lightning checkpoints and CSV metrics under `checkpoints/<stage>/` in the run directory. The trainer saves `last.ckpt` at the checkpoint interval and `final.ckpt` at completion. Pass `--resume PREVIOUS_RUN` with the original data and settings and a new `--out` directory. Completed stages load their final weights, interrupted stages resume from their latest checkpoint, and evaluation runs after training.
+Each stage writes Lightning checkpoints and CSV metrics under `checkpoints/<stage>/` in the run directory. `last.ckpt` records the latest saved training state, and `final.ckpt` marks completion. Predictor stages save progress at validation checks and restore the best weights when completed. Pass `--resume PREVIOUS_RUN` with the original data and settings and a new `--out` directory. Interrupted stages recover optimizer and callback state, and evaluation runs after training.
 
 ```bash
 old_run=results/pointmaze-diffuser.example/umaze
@@ -60,7 +66,7 @@ new_run="$(mktemp -d results/pointmaze-resume.XXXXXX)/umaze"
 uv run --no-sync wr pointmaze-latent --task umaze --resume "$old_run" --out "$new_run"
 ```
 
-Add any non-default flags from the original run to the resume command. Published Flax GCBC and grid weights remain readable for frozen inference. Resumption with optimizer state uses a Lightning checkpoint. The experiments use the configured update budgets. [Lightning checkpoint format](https://lightning.ai/docs/pytorch/stable/reference/common/checkpointing_basic)
+Add any non-default flags from the original run to the resume command. Published Flax GCBC and grid weights remain readable for frozen inference. Resumption with optimizer state uses a Lightning checkpoint from the same training recipe. [Lightning checkpoint format](https://lightning.ai/docs/pytorch/stable/reference/common/checkpointing_basic)
 
 ## Collect Craftax trajectories
 
@@ -101,7 +107,7 @@ The optional `corpus.iter_examples("train", with_terminal_example=True)` provide
 
 ## Train and test latent trajectory completion
 
-Run `wr train-completion --grid --out PATH` for the two-goal diagnostic or `wr train-completion --windows PATH --out PATH` for the exported Craftax corpus. The trainer runs both the goal-conditioned model and its history-and-time control. `--seed`, `--encoder-updates`, `--updates`, `--history-length` and `--queries-per-window` specify the training and batching recipe. The defaults use 250 encoder updates, 600 predictor updates per arm, a 16-observation history and up to 16 query positions per window.
+Run `wr train-completion --grid --out PATH` for the two-goal diagnostic or `wr train-completion --windows PATH --out PATH` for the exported Craftax corpus. The trainer runs both the goal-conditioned model and its history-and-time control. `--seed`, `--encoder-updates`, `--updates`, `--history-length` and `--queries-per-window` specify the training and batching recipe. The defaults use 250 encoder updates, up to 600 predictor updates per arm, a 16-observation history and up to 16 query positions per window. [Predictor checkpoint selection](#select-a-predictor-checkpoint)
 
 The grid has a wall with two passages and one colored destination on each side. Both destination positions and the passages are public. Each start has two shortest-path demonstrations. Both routes use the same 14-action budget and wait at their respective destination after arrival. The red and blue destinations trade sides across starts. The fixed split groups all nine starts per layout, with 32 training, 8 development and 16 test layouts. The paired reset observations, available time and query offsets are identical across the two goals at each start.
 

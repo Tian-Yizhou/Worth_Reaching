@@ -131,16 +131,17 @@ def run(
         )
         mean = train.observations.mean(axis=0)
         scale = np.maximum(train.observations.std(axis=0), 1e-3)
+        validation_windows = validation.sample_windows(
+            np.random.default_rng(801), 512, **settings
+        )
         model = fit(
             training,
+            validation_windows,
             mean,
             scale,
             config,
             out / "checkpoints",
             validate_resume(out, resume),
-        )
-        validation_windows = validation.sample_windows(
-            np.random.default_rng(801), 512, **settings
         )
         metrics = model.validate(validation_windows)
         write_json(out / "validation.json", metrics)
