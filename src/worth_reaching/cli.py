@@ -7,6 +7,9 @@ from pathlib import Path
 from worth_reaching.compute import ComputeConfig
 from worth_reaching.recipes import completion_recipe
 from worth_reaching.tasks.antmaze.cli import register_commands as register_antmaze
+from worth_reaching.tasks.dependency_grid.cli import (
+    register_commands as register_dependency_grid,
+)
 from worth_reaching.tasks.ogbench_manipulation.spec import PUZZLE_BOARDS, SCENE, TASKS
 from worth_reaching.tasks.pointmaze.cli import register_commands as register_pointmaze
 
@@ -252,6 +255,7 @@ def main() -> None:
     feedback.add_argument("--split", choices=("dev", "test"), default="dev")
     feedback.add_argument("--layouts", type=int)
     feedback.set_defaults(run=_run_grid_feedback, extra="craftax")
+    register_dependency_grid(commands)
     latent = register_antmaze(commands)
     pointmaze = register_pointmaze(commands)
     kuka = commands.add_parser(

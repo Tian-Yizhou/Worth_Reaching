@@ -12,7 +12,7 @@ Worth Reaching studies this question for long-horizon tasks. Given an observatio
 - **Discover candidate goals.** Sample multiple latent trajectories with a conditional flow. Decode selected states into targets a controller can pursue. Test whether the frozen model's energy helps identify useful candidates before execution.
 - **Measure contribution to success.** Compare pursuing a candidate with going directly to the terminal goal from matched starts under the same controller and action budget. Measure intermediate-goal arrival and final task success separately.
 
-[Research design](docs/trajectory-completion.md) · [Implementation plan](PLAN.md)
+[Research plan](docs/latent-subgoal-research.md) · [Trajectory completion design](docs/trajectory-completion.md) · [Implementation plan](PLAN.md)
 
 ## Setup
 
@@ -43,6 +43,7 @@ Choose an experiment below for its data preparation and run commands.
 
 | Task | What you can test |
 | --- | --- |
+| [Dependency grid](docs/experiments.md#compare-ordered-targets-in-the-dependency-grid) | Measure how choosing and ordering intermediate targets changes success when a task requires one or two prerequisites. |
 | [MiniGrid KeyCorridor](docs/experiments.md#replay-a-keycorridor-decision) | Branch at one decision and inspect how a single action changes the outcome at the deadline. |
 | [Two-goal grid](docs/experiments.md#sample-and-execute-alternative-routes) | Switch the terminal goal on the same layout, sample alternate routes and train from execution feedback. |
 | [Craftax-Classic](docs/experiments.md#collect-craftax-trajectories) | Collect expert and random demonstrations, then train on masked windows from episodes that craft an iron pickaxe and survive through the deadline. |

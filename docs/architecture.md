@@ -28,6 +28,7 @@ The `src/worth_reaching/` package groups code by responsibility.
 | `cli.py` | Connect configurations to collection, window export, training and evaluation |
 | `tasks/pointmaze/` | Own the Maze2D task specifications, dataset and simulator adapters, controller, experiment commands and paired probes |
 | `tasks/antmaze/` | Load AntMaze archives and saved actors, train the GCBC baseline, and run latent and waypoint comparisons from matched starts |
+| `tasks/dependency_grid/` | Define switchable terminal goals with ordered prerequisites and run paired diagnostic attempts through the public grid |
 | `planning/` | Execute decoded goals from public observation and action histories through a supplied controller |
 
 Group tasks that share simulator behavior in one family. For example, Scene and Puzzle share the OGBench reset and step implementation in `tasks/ogbench_manipulation/environment.py`. Their presets select the observation schema, goals and action limit. A new family can follow the PointMaze or AntMaze layout and register its commands from a lightweight `cli.py`, so listing commands works without installing simulator extras.
@@ -79,6 +80,8 @@ The trainer pads the recent history and uses evenly spaced queries across longer
 ## Sampled routes and attempts
 
 The grid flow learns the difference between a frozen prediction and an encoded demonstration for the complete interior window. It conditions on the starting observation, the goal and the frozen prediction. Each draw decodes to a route and declares one intermediate cell and attempt deadline. A feedback executor uses the observed cell to choose the next action. After arrival or timeout the same controller continues toward the terminal objective with the remaining budget. The evaluation runner supplies repeat streams, pairs those streams across candidates and saves the attempted latent target separately from the observed results. The route diagnostic uses a fixed grid horizon and exact public cell arrival. [Route generation and execution protocol](experiments.md#sample-and-execute-alternative-routes)
+
+The dependency-grid adapter defines public geometry, position, and acquired keys. A separate experiment runner declares target cells, applies matched slip draws, and records realized arrivals, elapsed steps, and terminal success. A changed terminal goal or depth reuses the same layout, reset, and slip draws. The diagnostic uses disjoint layout IDs for train, development, and test. [Ordered-target diagnostic](experiments.md#compare-ordered-targets-in-the-dependency-grid)
 
 ## Execution feedback
 
