@@ -10,7 +10,7 @@ CONFIG = Path(__file__).resolve().parents[2] / "configs/craftax/iron_pickaxe.tom
 
 def test_collect_cli_records_a_frozen_split(tmp_path):
     pytest.importorskip("craftax")
-    from worth_reaching.data.craftax_trajectories import load_craftax_archive
+    from worth_reaching.tasks.craftax.dataset import load_craftax_archive
 
     out = tmp_path / "craftax"
     subprocess.run(
@@ -115,8 +115,8 @@ def test_replay_natural_iron_pickaxe_trajectory():
     import jax
     from craftax.craftax_classic.constants import Action
 
-    from worth_reaching.data.craftax_trajectories import episode_spec
     from worth_reaching.evaluation.craftax import replay_prefix, run_attempt
+    from worth_reaching.tasks.craftax.dataset import episode_spec
     from worth_reaching.tasks.craftax.environment import CraftaxClassic
 
     fixture = CONFIG.parents[2] / "tests/fixtures/craftax_iron_pickaxe.json"

@@ -15,7 +15,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from worth_reaching.data.artifacts import code_revision, write_json
-from worth_reaching.data.craftax_trajectories import (
+from worth_reaching.tasks.craftax.dataset import (
     RANDOM_POLICY,
     SPLIT_VERSION,
     EpisodeSpec,
@@ -117,7 +117,7 @@ def collect(
     policy_factory = _random_policy
     policy_metadata: dict[str, int | str] = {}
     if expert_checkpoint is not None:
-        from worth_reaching.policies.craftax_expert import CraftaxExpert
+        from worth_reaching.tasks.craftax.expert import CraftaxExpert
 
         expert = CraftaxExpert(expert_checkpoint)
         policy_id = expert.policy_id

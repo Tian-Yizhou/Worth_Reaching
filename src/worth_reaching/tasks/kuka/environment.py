@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pybullet as physics
 
-from worth_reaching.data.kuka import JOINTS, STATE_SIZE, block_states
+from worth_reaching.tasks.kuka.dataset import JOINTS, STATE_SIZE, block_states
 
 REVISION = "7c4d4da918c38f30241283d1f70d61a9b2293d09"
 ACTION_LIMIT = 384

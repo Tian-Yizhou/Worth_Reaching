@@ -11,7 +11,7 @@ import torch
 from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
-from worth_reaching.data.completion import CompletionExample, load_completion_corpus
+from worth_reaching.data.completion import CompletionExample
 from worth_reaching.models.completion import (
     CHECKPOINT_SCHEMA,
     LatentPredictor,
@@ -162,6 +162,7 @@ def run_completion_training(
         }
     else:
         from worth_reaching.tasks.craftax.environment import ACTION_NAMES
+        from worth_reaching.tasks.craftax.windows import load_completion_corpus
 
         if evaluate_test:
             raise ValueError("--evaluate-test is available for the grid diagnostic")
