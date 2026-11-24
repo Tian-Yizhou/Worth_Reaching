@@ -53,14 +53,38 @@ def test_puzzle_boards_restore_public_goal_and_native_physics(
 
 
 @pytest.mark.parametrize(
-    ("command", "options", "environment", "observation_size", "limit", "reset_seed"),
+    (
+        "command",
+        "options",
+        "tasks",
+        "environment",
+        "observation_size",
+        "limit",
+        "reset_seed",
+    ),
     [
-        ("scene-latent", [], "scene", 40, 750, 43001),
-        ("puzzle-latent", ["--board", "4x5"], "puzzle-4x5", 99, 1000, 46001),
+        (
+            "scene-latent",
+            ["--task", "4", "--task", "5"],
+            [4, 5],
+            "scene",
+            40,
+            750,
+            43001,
+        ),
+        (
+            "puzzle-latent",
+            ["--board", "4x5", "--task", "4"],
+            [4],
+            "puzzle-4x5",
+            99,
+            1000,
+            46001,
+        ),
     ],
 )
 def test_manipulation_cli_trains_and_reuses_start_and_controller(
-    tmp_path, command, options, environment, observation_size, limit, reset_seed
+    tmp_path, command, options, tasks, environment, observation_size, limit, reset_seed
 ):
     np = pytest.importorskip("numpy")
     pytest.importorskip("ogbench")
@@ -90,8 +114,6 @@ def test_manipulation_cli_trains_and_reuses_start_and_controller(
             tmp_path,
             "--out",
             out,
-            "--task",
-            "4",
             "--eval-repeats",
             "1",
             "--eval-steps",
@@ -115,10 +137,14 @@ def test_manipulation_cli_trains_and_reuses_start_and_controller(
     assert manifest["environment"] == f"{environment}-v0"
     assert manifest["dataset"] == f"{environment}-play-v0"
     assert manifest["training"]["max_horizon"] == limit
-    assert manifest["evaluation"]["tasks"] == [4]
+    assert manifest["evaluation"]["tasks"] == tasks
     assert manifest["observation"] == "official_state"
     assert manifest["train_sha256"] != manifest["validation_sha256"]
     episodes = json.loads((out / "episodes.json").read_text())
+    for arm in ("direct", "latent"):
+        assert [(row["task"], row["seed"]) for row in episodes[arm]] == [
+            (task, reset_seed) for task in tasks
+        ]
     direct, latent = episodes["direct"][0], episodes["latent"][0]
     assert direct["seed"] == latent["seed"] == reset_seed
     assert direct["task"] == latent["task"] == 4
@@ -132,10 +158,9 @@ def test_manipulation_cli_trains_and_reuses_start_and_controller(
         plan = json.loads(next(stream))
     assert np.asarray(plan["latent_routes"]).shape == (4, 8, 16)
     assert np.asarray(plan["decoded_routes"]).shape == (4, 8, observation_size)
-    assert (
-        json.loads((out / "summary.json").read_text())["evaluation_environment_steps"]
-        == direct["steps"] + latent["steps"]
-    )
+    assert json.loads((out / "summary.json").read_text())[
+        "evaluation_environment_steps"
+    ] == sum(row["steps"] for rows in episodes.values() for row in rows)
 
 
 def test_scene_reachability_cli_pairs_recorded_actions_with_frozen_actor(tmp_path):

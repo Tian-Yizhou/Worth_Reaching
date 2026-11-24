@@ -119,7 +119,7 @@ def run(
     executor: ExecutorConfig,
     *,
     split: str,
-    task: int | None,
+    task: int | tuple[int, ...] | None,
     repeats: int,
     limit: int | None,
     resume: Path | None = None,
@@ -144,7 +144,7 @@ def run(
     ]
     if train.fingerprint == validation.fingerprint:
         raise ValueError("Training and validation must use distinct OGBench archives")
-    tasks = TASKS if task is None else (task,)
+    tasks = TASKS if task is None else (task,) if isinstance(task, int) else task
     start_seed = benchmark.seed_base + SEED_OFFSETS[split]
     seeds = range(start_seed, start_seed + repeats)
     out.mkdir(parents=True, exist_ok=False)

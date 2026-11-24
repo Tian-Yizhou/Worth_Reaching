@@ -158,7 +158,7 @@ def _manipulation_latent(args: argparse.Namespace) -> dict[str, object]:
         ),
         ExecutorConfig(updates=args.executor_updates),
         split=args.eval_split,
-        task=args.task,
+        task=tuple(dict.fromkeys(args.task)) if args.task is not None else None,
         repeats=args.eval_repeats,
         limit=args.eval_steps,
         resume=args.resume,
@@ -320,7 +320,11 @@ def main() -> None:
         command.add_argument("--predictor-updates", type=int)
         command.add_argument("--flow-updates", type=int)
         command.add_argument(
-            "--task", type=int, choices=TASKS, help="Select one official task"
+            "--task",
+            type=int,
+            choices=TASKS,
+            action="append",
+            help="Select an official task (repeat to evaluate several in one run)",
         )
         command.add_argument("--eval-split", choices=("dev", "test"), default="dev")
         command.add_argument("--eval-repeats", type=int, default=2)
