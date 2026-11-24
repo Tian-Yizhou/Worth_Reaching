@@ -5,6 +5,46 @@ import subprocess
 import pytest
 
 
+def test_drawer_waypoints_require_a_stable_placement_within_one_episode():
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("ogbench")
+    pytest.importorskip("torch")
+    pytest.importorskip("flax")
+    from worth_reaching.data.ogbench import StateArchive
+    from worth_reaching.evaluation.scene_reachability import (
+        _arrival,
+        _drawer_placed,
+        _drawer_waypoints,
+    )
+
+    observations = np.zeros((130, 40), dtype=np.float32)
+    observations[:, 36] = -0.16 * 18
+    observations[:, 19:22] = [-0.75, 0.5, 0.2]
+    put_in_drawer = [-0.95, -2.4, 0.66]
+    observations[30:34, 19:22] = put_in_drawer
+    observations[70:75, 19:22] = put_in_drawer
+    observations[97:103, 19:22] = put_in_drawer
+    observations[110:115, 19:22] = put_in_drawer
+    archive = StateArchive(
+        observations,
+        np.zeros((130, 5), dtype=np.float32),
+        np.array([99, 129]),
+        np.flatnonzero(~np.isin(np.arange(130), [99, 129])),
+        "fixture",
+    )
+    assert list(_drawer_waypoints(archive, [64], 20, 803)) == [
+        ("drawer_insertion", 64, 0, 10)
+    ]
+    assert _arrival(observations[:74], observations[74], _drawer_placed, 5) == (
+        None,
+        False,
+    )
+    assert _arrival(observations[:75], observations[74], _drawer_placed, 5) == (
+        74,
+        True,
+    )
+
+
 def test_scene_restores_goal_physics_and_next_observation():
     np = pytest.importorskip("numpy")
     pytest.importorskip("ogbench")

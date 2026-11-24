@@ -1,6 +1,7 @@
 """Measure a frozen Scene actor's arrival at achieved validation waypoints."""
 
 import json
+from collections.abc import Callable
 from hashlib import sha256
 from importlib.metadata import version
 from pathlib import Path
@@ -26,6 +27,9 @@ BUTTON_STATES = [28, 29, 32, 33]
 SLIDES = [36, 38]
 ARRIVAL_METERS = 0.04
 RESTORE_TOLERANCE = 1e-3
+DRAWER_OPEN_METERS = 0.12
+DRAWER_HOLD_FRAMES = 5
+Arrival = Callable[[np.ndarray, np.ndarray], np.ndarray]
 
 
 def _cube_yaw_is_singular(observation: np.ndarray) -> bool:
@@ -78,10 +82,78 @@ def _arrived(observations: np.ndarray, goal: np.ndarray) -> np.ndarray:
     return _scene_match(observations, goal) & _effector_match(observations, goal)
 
 
-def _arrival(path: np.ndarray, goal: np.ndarray) -> tuple[int | None, bool]:
-    matching = _arrived(path, goal)
-    hits = np.flatnonzero(matching)
-    return int(hits[0]) if hits.size else None, bool(matching[-1])
+def _arrival(path, goal, matches: Arrival, hold: int) -> tuple[int | None, bool]:
+    if len(path) < hold:
+        return None, False
+    in_region = matches(path, goal)
+    stable = np.convolve(in_region, np.ones(hold, dtype=int), mode="valid") == hold
+    hits = np.flatnonzero(stable)
+    return int(hits[0] + hold - 1) if hits.size else None, bool(stable[-1])
+
+
+def _drawer_geometry(observations: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    slide = observations[..., SLIDES[0]] / 18
+    # OGBench play targets (0.33, -0.24, 0.066) with the drawer fully open.
+    # The slide axis points towards negative world y, so the target moves with it.
+    relative = observations[..., CUBE] / 10 + np.array([0.425 - 0.33, 0.24, -0.066])
+    relative[..., 1] += slide + 0.16
+    return slide, np.linalg.norm(relative, axis=-1)
+
+
+def _drawer_placed(observations: np.ndarray, _goal: np.ndarray) -> np.ndarray:
+    slide, distance = _drawer_geometry(observations)
+    separation = (
+        np.linalg.norm(observations[..., EFFECTOR] - observations[..., CUBE], axis=-1)
+        / 10
+    )
+    return (
+        (slide <= -DRAWER_OPEN_METERS)
+        & (distance <= ARRIVAL_METERS)
+        & (separation > 0.055)
+    )
+
+
+def _drawer_waypoints(archive: StateArchive, offsets: list[int], count: int, seed: int):
+    obs = archive.observations
+    if len(obs) < DRAWER_HOLD_FRAMES:
+        return
+    roots = np.searchsorted(archive.ends, np.arange(len(obs)))
+    slide, distance = _drawer_geometry(obs)
+    ends = np.arange(DRAWER_HOLD_FRAMES - 1, len(obs))
+    stable = (
+        np.convolve(
+            _drawer_placed(obs, obs),
+            np.ones(DRAWER_HOLD_FRAMES, dtype=int),
+            mode="valid",
+        )
+        == DRAWER_HOLD_FRAMES
+    )
+    stable &= roots[ends] == roots[ends - DRAWER_HOLD_FRAMES + 1]
+    entries = ends[stable & ~np.r_[False, stable[:-1]]]
+    rng = np.random.default_rng(seed)
+    for offset in offsets:
+        goals = entries[entries >= offset]
+        rows = goals - offset
+        eligible = (
+            (roots[rows] == roots[goals])
+            & (slide[rows] <= -DRAWER_OPEN_METERS)
+            & (distance[rows] >= 0.10)
+            & (obs[rows, 21] < 0.45)
+        )
+        rows = np.array(
+            [
+                row
+                for row in rows[eligible]
+                if np.all(slide[row : row + offset + 1] <= -0.10)
+            ],
+            dtype=int,
+        )
+        episodes = np.unique(roots[rows])
+        for episode in rng.choice(
+            episodes, size=min(count, len(episodes)), replace=False
+        ):
+            row = int(rng.choice(rows[roots[rows] == episode]))
+            yield "drawer_insertion", offset, int(episode), row
 
 
 def _read_replays(
@@ -159,23 +231,33 @@ def _rollout(
     act: Policy,
     *,
     stop_on_arrival: bool,
+    matches: Arrival,
+    hold: int,
 ):
     observations, actions = [initial], []
+    streak = int(matches(initial, goal)) if stop_on_arrival else 0
     for _ in range(steps):
         action = act(observations[-1], goal)
         observation, _, done, truncated, _ = env.step(action)
         observations.append(np.asarray(observation, dtype=np.float32))
         actions.append(action)
-        if done or truncated or (stop_on_arrival and _arrived(observations[-1], goal)):
+        if stop_on_arrival:
+            streak = streak + 1 if matches(observations[-1], goal) else 0
+        if done or truncated or streak >= hold:
             break
     path = np.stack(observations)
-    return path, np.stack(actions), *_arrival(path, goal)
+    return path, np.stack(actions), *_arrival(path, goal, matches, hold)
 
 
-def _summary(attempts: list[dict], offsets: list[int], budgets: list[int]) -> dict:
+def _summary(
+    attempts: list[dict],
+    offsets: list[int],
+    budgets: list[int],
+    strata: tuple[str, ...],
+) -> dict:
     groups = {}
     for offset in offsets:
-        for group in ("scene_change", "pose_only"):
+        for group in strata:
             rows = [r for r in attempts if (r["offset"], r["group"]) == (offset, group)]
             reproduced = [r for r in rows if r["replay_matches_at_offset"]]
             groups[f"{group}_{offset}"] = {
@@ -221,6 +303,7 @@ def run(
     budgets: list[int],
     cases_per_group: int,
     replay_from: Path | None = None,
+    waypoints: str = "mixed",
 ) -> dict:
     if (
         seed < 0
@@ -267,7 +350,23 @@ def run(
 
     with np.load(archive_path, allow_pickle=False) as data:
         qpos, qvel, buttons = (data[key] for key in ("qpos", "qvel", "button_states"))
-    cases = list(_waypoints(archive, offsets, cases_per_group, seed))
+    if waypoints == "drawer-insertion":
+        sample, matches, hold = _drawer_waypoints, _drawer_placed, DRAWER_HOLD_FRAMES
+        strata = ("drawer_insertion",)
+        arrival_rule = {
+            "radius_meters": ARRIVAL_METERS,
+            "drawer_open_meters": DRAWER_OPEN_METERS,
+            "gripper_separation_meters": 0.055,
+            "hold_frames": hold,
+        }
+    else:
+        sample, matches, hold = _waypoints, _arrived, 1
+        strata = ("scene_change", "pose_only")
+        arrival_rule = {
+            "radius_meters": ARRIVAL_METERS,
+            "features": ["cube_xyz", "drawer", "window", "lock_bits", "effector_xyz"],
+        }
+    cases = list(sample(archive, offsets, cases_per_group, seed))
     if not cases:
         raise ValueError(
             "No nontrivial within-episode targets at the requested offsets"
@@ -300,16 +399,8 @@ def run(
             "cases_per_group": cases_per_group,
             "offsets": offsets,
             "budgets": budgets,
-            "arrival": {
-                "radius_meters": ARRIVAL_METERS,
-                "features": [
-                    "cube_xyz",
-                    "drawer",
-                    "window",
-                    "lock_bits",
-                    "effector_xyz",
-                ],
-            },
+            "waypoints": waypoints,
+            "arrival": arrival_rule,
             "code_revision": code_revision(),
         },
     )
@@ -353,7 +444,7 @@ def run(
                         f"Scene attempts at archive row {row} did not start together"
                     )
                 if use_cached:
-                    arrival, ends_at_goal = _arrival(path, goal)
+                    arrival, ends_at_goal = _arrival(path, goal, matches, hold)
                 else:
                     path, commands, arrival, ends_at_goal = _rollout(
                         env,
@@ -362,6 +453,8 @@ def run(
                         steps,
                         policy,
                         stop_on_arrival=arm == "actor",
+                        matches=matches,
+                        hold=hold,
                     )
                 attempt[f"{arm}_steps"] = len(commands)
                 attempt[f"{arm}_arrival"] = arrival
@@ -376,6 +469,6 @@ def run(
         env.close()
     write_json(out / "attempts.json", attempts)
     np.savez_compressed(out / "trajectories.npz", **trajectories)
-    summary = _summary(attempts, offsets, budgets)
+    summary = _summary(attempts, offsets, budgets, strata)
     write_json(out / "summary.json", summary)
     return summary

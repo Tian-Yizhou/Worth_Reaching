@@ -517,6 +517,12 @@ The evaluator reports whether recorded actions reproduce the target at the recor
 
 When comparing checkpoints on the same waypoint bank, pass `--replay-from PATH` to reuse the first run's recorded-action branches. The evaluator checks the archive hash, simulator versions, reset seed, waypoint rows and recorded actions. It accounts for reused steps separately from new simulator interactions.
 
+### Test Scene drawer insertion in isolation
+
+Use `--waypoints drawer-insertion --offsets 64 --budgets 32 64 128` with `scene-reachability` to give the frozen controller recorded targets reached after inserting the cube. Choose `--cases-per-group 100` to include all eligible validation episodes in the standard archive. The start has an open drawer at least 12 cm out and a cube below 4.5 cm on the table, at least 10 cm from the moving drawer target. The sampled clip keeps the drawer at least 10 cm open and ends at the fifth consecutive placement frame. All offsets stay within each source episode.
+
+Placement requires the drawer to be at least 12 cm open, the cube to be within 4 cm of the drawer-relative placement center, and the end effector to be more than 5.5 cm from the cube for five consecutive observations. The controller receives the recorded public goal observation. The score uses placement and release so it can distinguish control of the cube from reproduction of the demonstrated arm pose. The paired recorded-action replay checks the start and target under the same simulator. The diagnostic measures this skill on validation clips.
+
 ## Run state-based OGBench Puzzle
 
 The robot presses buttons to match the full goal pattern. The evaluator uses OGBench's five official goal configurations and scores the native success event. The board selects the official dataset, observation width and action budget. [OGBench Puzzle](https://seohong.me/projects/ogbench/#puzzle) · [Official task and dataset specifications](https://arxiv.org/html/2410.20092#A5.SS1)
