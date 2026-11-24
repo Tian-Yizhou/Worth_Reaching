@@ -476,9 +476,28 @@ uv run --no-sync wr scene-latent --out "$run_dir/state" --eval-repeats 1
 
 `scene-v0` supplies a 40-feature public state, five continuous action coordinates and five goal configurations involving the cube, drawer, window and locks. Both arms reuse exactly the same seeded start and goal. Each rollout stops on the official success event or the 750-action limit. Use `--task 4` to isolate the cube-in-drawer task, `--eval-steps` to shorten a smoke test, and `--eval-split test` after fixing the experiment recipe. [OGBench Scene](https://seohong.me/projects/ogbench/#scene) · [Dataset and task protocol](https://github.com/seohongpark/ogbench)
 
+Repeat `--task` to evaluate selected goals with one set of trained weights. `--task 4 --task 5` evaluates the drawer and rearrangement goals using the same controller and planner. The flag also works for `puzzle-latent`.
+
+Use `--eval-workers 4` to distribute independent starts across four CPU processes after training. Each process restores the same frozen weights and runs both arms on each of its starts. The manifest records the actual worker count under `compute.eval_workers`.
+
 Executor training alternates hindsight-goal batches capped at 64 transitions and batches that sample any later observation in the same training episode. Both arms use that actor after training. The direct arm tracks the terminal observation. The latent arm takes the earliest state of the first sampled decoded route and replans when its time offset elapses. The official input features and action history feed the planner. Extra archive fields for MuJoCo state and buttons are outside the training loader.
 
 The manifest identifies the official train and validation archives by checksum. Offline validation reports action MSE and normalized reconstruction and prediction MSE. The other artifacts contain exact starts, public trajectories with executed actions, sampled plans, weights and paired success by task.
+
+### Compare native CPU and batched CUDA Scene evaluation
+
+`scene-evaluate` loads a completed `scene-latent` run and evaluates the frozen controller and planner. Use the same checkpoint, tasks, split, seeds and budgets for both backends. On Linux x86-64, add `--extra scene-warp` to the Scene install for CUDA physics.
+
+```bash
+checkpoint=results/path-to-scene-run
+run_dir="$(mktemp -d results/scene-backends.XXXXXX)"
+uv run --no-sync wr scene-evaluate --checkpoint "$checkpoint" --task 4 --task 5 \
+  --eval-repeats 8 --eval-workers 4 --out "$run_dir/cpu"
+uv run --no-sync wr scene-evaluate --checkpoint "$checkpoint" --task 4 --task 5 \
+  --eval-repeats 8 --backend warp --batch-size 16 --out "$run_dir/warp"
+```
+
+The Warp backend batches physics substeps and contact forces on one CUDA device. It uses OGBench's native reset, inverse kinematics, button and lock transitions, and success rule on the host. Warp's single-precision solver can change trajectories and outcome labels. The run records the backend and elapsed evaluation time, including worker or graph setup, and saves both arms' public observations and actions. Use Warp for development throughput and numerical comparisons. Use native MuJoCo for official scores until agreement on contact-heavy traces and terminal outcomes is established.
 
 ### Test Scene waypoint reachability
 
@@ -492,7 +511,9 @@ uv run --no-sync wr scene-reachability --checkpoint results/path-to-scene-run \
 
 For each demonstration offset, the evaluator samples one nontrivial waypoint per selected validation episode in each group. `scene_change` requires a change to the cube, drawer, window or locks. `pose_only` requires moving the end effector while the scene already matches. Arrival requires the cube and end-effector positions and both slides to be within 4 cm of their respective targets, with both lock states matching exactly. The controller receives the live public observation and the recorded public target.
 
-Both arms restore the same archived start. The evaluator uses the private physics and lock arrays for restoration and reports whether the recorded actions reproduce the target at the recorded offset. The archive lacks MuJoCo's contact-force cache, so the evaluator reports the initial contact discrepancy and checks the remaining public features against the archive. The controller runs up to the largest budget. Its first arrival supplies the outcome at every smaller budget, including on the last permitted action. `summary.json` gives counts for all cases and for the subset the replay reproduces. The full public trajectories and per-case outcomes allow further inspection. This development diagnostic uses play-archive states and measures local arrival. Official Task 4 and 5 resets and terminal success are evaluated with `scene-latent`.
+Both arms restore the same archived start. The evaluator uses the private physics and lock arrays for restoration and reports whether the recorded actions reproduce the target at the recorded offset. The archive lacks MuJoCo's contact-force cache, so the evaluator reports the initial contact discrepancy and checks the remaining public features against the archive. The controller stops at first arrival or the largest budget. The first arrival supplies the outcome at each budget, including on the last permitted action. `summary.json` gives counts for all cases and for the subset the replay reproduces. The public trajectory prefixes and per-case outcomes allow further inspection. This development diagnostic uses play-archive states and measures local arrival. Official Task 4 and 5 resets and terminal success are evaluated with `scene-latent`.
+
+When comparing checkpoints on the same waypoint bank, pass `--replay-from PATH` to reuse the first run's recorded-action branches. The evaluator checks the archive hash, simulator versions, reset seed, waypoint rows and recorded actions. It accounts for reused steps separately from new simulator interactions.
 
 ## Run state-based OGBench Puzzle
 

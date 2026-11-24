@@ -158,10 +158,11 @@ def _manipulation_latent(args: argparse.Namespace) -> dict[str, object]:
         ),
         ExecutorConfig(updates=args.executor_updates),
         split=args.eval_split,
-        task=args.task,
+        task=tuple(dict.fromkeys(args.task)) if args.task is not None else None,
         repeats=args.eval_repeats,
         limit=args.eval_steps,
         resume=args.resume,
+        eval_workers=args.eval_workers,
     )
 
 
@@ -176,6 +177,24 @@ def _scene_reachability(args: argparse.Namespace) -> dict[str, object]:
         offsets=args.offsets,
         budgets=args.budgets,
         cases_per_group=args.cases_per_group,
+        replay_from=args.replay_from,
+    )
+
+
+def _scene_evaluate(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.ogbench_manipulation import evaluate_frozen_scene
+
+    return evaluate_frozen_scene(
+        args.checkpoint,
+        args.out,
+        tasks=tuple(dict.fromkeys(args.task)) if args.task is not None else TASKS,
+        split=args.eval_split,
+        repeats=args.eval_repeats,
+        limit=args.eval_steps,
+        backend=args.backend,
+        eval_workers=args.eval_workers,
+        batch_size=args.batch_size,
+        device=args.device,
     )
 
 
@@ -320,10 +339,20 @@ def main() -> None:
         command.add_argument("--predictor-updates", type=int)
         command.add_argument("--flow-updates", type=int)
         command.add_argument(
-            "--task", type=int, choices=TASKS, help="Select one official task"
+            "--task",
+            type=int,
+            choices=TASKS,
+            action="append",
+            help="Select an official task (repeat to evaluate several in one run)",
         )
         command.add_argument("--eval-split", choices=("dev", "test"), default="dev")
         command.add_argument("--eval-repeats", type=int, default=2)
+        command.add_argument(
+            "--eval-workers",
+            type=int,
+            default=1,
+            help="Number of CPU processes for independent matched starts",
+        )
         command.add_argument(
             "--eval-steps",
             type=int,
@@ -346,7 +375,27 @@ def main() -> None:
         "--budgets", nargs="+", type=int, default=[16, 32, 64, 128]
     )
     reachability.add_argument("--cases-per-group", type=int, default=6)
+    reachability.add_argument(
+        "--replay-from",
+        type=Path,
+        help="Reuse recorded-action replays from an identical waypoint bank",
+    )
     reachability.set_defaults(run=_scene_reachability, extra="ogbench")
+    evaluate = commands.add_parser(
+        "scene-evaluate",
+        help="Evaluate frozen Scene weights on CPU or batched CUDA physics",
+    )
+    evaluate.add_argument("--checkpoint", type=Path, required=True)
+    evaluate.add_argument("--out", type=Path, required=True)
+    evaluate.add_argument("--task", action="append", choices=TASKS, type=int)
+    evaluate.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    evaluate.add_argument("--eval-repeats", type=int, default=4)
+    evaluate.add_argument("--eval-steps", type=int, default=SCENE.action_limit)
+    evaluate.add_argument("--backend", choices=("cpu", "warp"), default="cpu")
+    evaluate.add_argument("--eval-workers", type=int, default=1)
+    evaluate.add_argument("--batch-size", type=int, default=16)
+    evaluate.add_argument("--device", default="cuda:0")
+    evaluate.set_defaults(run=_scene_evaluate, extra="ogbench")
     comparison = commands.add_parser(
         "attempt-compare", help="Fit and compare shared-bank selectors"
     )
