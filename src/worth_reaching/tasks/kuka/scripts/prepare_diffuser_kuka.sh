@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd -- "$script_dir/../../../../.."
 
 source_dir=results/external/diffuser-kuka
 data_dir=results/datasets/diffuser-kuka
 revision=7c4d4da918c38f30241283d1f70d61a9b2293d09
 archive="$data_dir/metainfo.tar.gz"
 archive_sha=39c11a72be2d3de0ed2722ae3ce1eda039d25d09f4873fecb651b01d06fe79a8
-patch="$PWD/scripts/diffuser-kuka-compat.patch"
+patch="$script_dir/diffuser-kuka-compat.patch"
 
 mkdir -p -- results/external "$data_dir"
 if [[ ! -d "$source_dir/.git" ]]; then

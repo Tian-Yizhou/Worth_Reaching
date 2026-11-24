@@ -115,7 +115,7 @@ From the repository root, install the CPU dependencies used by CI and run the re
 ```bash
 uv sync --locked --group dev --extra training-cpu --extra minigrid --extra craftax --extra ogbench --extra pointmaze
 uv run --no-sync ruff check .
-uv run --no-sync ruff format --check src tests scripts
+uv run --no-sync ruff format --check src tests
 CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu uv run --no-sync pytest
 ```
 
@@ -222,12 +222,12 @@ cat "$collection/summary.json"
 The following commands start matching expert and random collections with the same world seeds and step budget. The published PPO-RNN checkpoint supplies the expert actions.
 
 ```bash
-python3 scripts/fetch_craftax_expert.py
+python3 src/worth_reaching/tasks/craftax/scripts/fetch_craftax_expert.py
 
 tmux new-session -d -s wr-craftax-expert -c "$PWD" \
-  'bash scripts/run_craftax_collection.sh expert 1000 256 25000 make_iron_pickaxe_and_survive'
+  'bash src/worth_reaching/tasks/craftax/scripts/run_craftax_collection.sh expert 1000 256 25000 make_iron_pickaxe_and_survive'
 tmux new-session -d -s wr-craftax-random -c "$PWD" \
-  'bash scripts/run_craftax_collection.sh random 1000 256 25000 make_iron_pickaxe_and_survive'
+  'bash src/worth_reaching/tasks/craftax/scripts/run_craftax_collection.sh random 1000 256 25000 make_iron_pickaxe_and_survive'
 ```
 
 Attach with `tmux attach -t wr-craftax-expert` or `tmux attach -t wr-craftax-random`. The launcher prints the resolved path and writes the log next to the run.
@@ -453,7 +453,7 @@ Install the locked `stacking` extra alongside your existing extras. PyBullet bui
 
 ```bash
 uv sync --locked --group dev --extra training --extra minigrid --extra craftax --extra ogbench --extra pointmaze --extra stacking
-bash scripts/prepare_diffuser_kuka.sh
+bash src/worth_reaching/tasks/kuka/scripts/prepare_diffuser_kuka.sh
 run_dir="$(mktemp -d results/diffuser-kuka.pilot.XXXXXX)"
 uv run --no-sync wr kuka-latent --out "$run_dir/conditional"
 ```
