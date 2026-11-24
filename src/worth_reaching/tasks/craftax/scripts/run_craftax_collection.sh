@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd -- "$script_dir/../../../../.."
 
 if [[ $# -lt 1 || $# -gt 5 ]]; then
-  echo 'Usage: bash scripts/run_craftax_collection.sh expert|random [episodes] [budget] [seed_start] [task]' >&2
+  printf 'Usage: bash %q expert|random [episodes] [budget] [seed_start] [task]\n' "${BASH_SOURCE[0]}" >&2
   exit 2
 fi
 
@@ -19,7 +20,7 @@ case "$policy" in
   expert)
     checkpoint="$artifact_root/checkpoints/craftax-classic-ppo-rnn"
     if [[ ! -d "$checkpoint" ]]; then
-      echo 'Fetch the expert first: python3 scripts/fetch_craftax_expert.py' >&2
+      printf 'Fetch the expert first: python3 %q\n' "$script_dir/fetch_craftax_expert.py" >&2
       exit 1
     fi
     args+=(--expert-checkpoint "$checkpoint")

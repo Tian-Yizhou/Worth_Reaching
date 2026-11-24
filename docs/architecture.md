@@ -19,6 +19,7 @@ The `src/worth_reaching/` package groups code by responsibility.
 | Package | Current responsibility |
 | --- | --- |
 | `tasks/<family>/environment.py` | Adapt the simulator and its task rules, expose public observations and actions, and support evaluator-controlled resets |
+| `tasks/<family>/scripts/` | Hold task-specific setup and collection launchers and their supporting files |
 | `data/` | Represent public completion examples and masked trajectory windows, read shared OGBench archives and record experiment artifacts |
 | `models/` | Encode observations, predict masked latent positions and sample residual trajectories |
 | `models/training.py` | Configure Lightning trainers, step-indexed batches, checkpoints and logs |

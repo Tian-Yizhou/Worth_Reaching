@@ -59,7 +59,7 @@ The Python package lives under `src/worth_reaching/`. Task adapters supply obser
 
 | Module | Responsibility |
 | --- | --- |
-| [`tasks/`](src/worth_reaching/tasks) | Own simulator adapters, task definitions, dataset loaders, and task-specific experiment code. |
+| [`tasks/`](src/worth_reaching/tasks) | Own simulator adapters, task definitions, dataset loaders, and task-specific experiment code and scripts. |
 | [`models/`](src/worth_reaching/models) | Encode observations, predict masked latent states, sample trajectories, and train or restore weights. |
 | [`data/`](src/worth_reaching/data) | Define shared trajectory and window formats, read OGBench state archives, and record experiment artifacts. |
 | [`planning/`](src/worth_reaching/planning) | Execute intermediate targets with a supplied controller and replan from new observations. |

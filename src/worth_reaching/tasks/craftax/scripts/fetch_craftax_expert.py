@@ -11,7 +11,7 @@ from urllib.request import urlopen
 REPO = "mathisweil/remdm-craftax-checkpoints"
 REVISION = "5b66c77b497777e4ffdcbf20c3563402e404daf8"
 SOURCE = "checkpoints/ppo_agents/Craftax-Classic-Symbolic-v1-PPO_RNN-1000M/"
-RESULTS_DIR = Path(__file__).resolve().parents[1] / "results"
+RESULTS_DIR = Path(__file__).resolve().parents[5] / "results"
 DEFAULT_CHECKPOINT = RESULTS_DIR / "checkpoints/craftax-classic-ppo-rnn"
 
 
