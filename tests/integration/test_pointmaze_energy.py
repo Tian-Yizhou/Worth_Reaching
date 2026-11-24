@@ -24,8 +24,8 @@ def test_latent_prefix_handoff_and_terminal_labels(miss_first):
     pytest.importorskip("torch")
     pytest.importorskip("flax")
     pytest.importorskip("minari")
-    from worth_reaching.envs.pointmaze import Step
-    from worth_reaching.evaluation.pointmaze_energy import attempt_prefix
+    from worth_reaching.tasks.pointmaze.energy import attempt_prefix
+    from worth_reaching.tasks.pointmaze.environment import Step
 
     def state(x):
         return np.array([x, 0, 0, 0], dtype=np.float32)

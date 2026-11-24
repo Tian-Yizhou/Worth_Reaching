@@ -28,7 +28,7 @@ def query_offsets(remaining: NDArray[np.int32], queries: int) -> NDArray[np.int3
 
 
 @dataclass(frozen=True, slots=True)
-class MazeTrajectories:
+class ContinuousTrajectories:
     observations: NDArray[np.float32]
     actions: NDArray[np.float32]
     ends: NDArray[np.int64]

@@ -111,6 +111,8 @@ uv run --no-sync wr antmaze-latent \
 
 ### Run a Maze2D pilot
 
+The PointMaze task package contains its dataset adapter, simulator and evaluation commands. Use `--config configs/pointmaze/completion-smoke.toml` on `wr pointmaze-latent` to run a small model. [Model configuration](docs/experiments.md#configure-a-completion-model)
+
 Train and evaluate the same latent planner on Farama's maintained versions of D4RL Maze2D U-Maze, Medium and Large. Select a task with `--task umaze`, `--task medium` or `--task large`. The pilot pairs direct and latent planning from the same resets using a common controller. [Dataset setup and scoring protocol](docs/experiments.md#run-the-diffuser-maze2d-pilots)
 
 ```bash

@@ -14,22 +14,22 @@ import torch
 from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
-from worth_reaching.data.pointmaze import ACTION_SIZE, load_dataset
-from worth_reaching.envs.pointmaze import PointMaze
-from worth_reaching.envs.pointmaze_tasks import TASKS
-from worth_reaching.evaluation.maze_planning import RecedingGoals, completion_context
-from worth_reaching.evaluation.pointmaze import (
-    ALIGNED_SCHEMA,
-    BUDGET_SCHEMA,
-    rollout,
-    track,
-)
-from worth_reaching.models.maze_completion import (
+from worth_reaching.models.continuous_completion import (
     BudgetedCompletionConfig,
     CompletionConfig,
     LearnedCompletion,
 )
 from worth_reaching.models.training import PredictorStopping, stream_seed
+from worth_reaching.planning.receding_goals import RecedingGoals, completion_context
+from worth_reaching.tasks.pointmaze.dataset import ACTION_SIZE, load_dataset
+from worth_reaching.tasks.pointmaze.environment import PointMaze
+from worth_reaching.tasks.pointmaze.experiment import (
+    ALIGNED_SCHEMA,
+    BUDGET_SCHEMA,
+    rollout,
+    track,
+)
+from worth_reaching.tasks.pointmaze.spec import TASKS
 
 
 @dataclass(frozen=True, slots=True)

@@ -60,6 +60,7 @@ def fit(
     seed: int,
     updates: int,
     out: Path,
+    learning_rate: float = 0.001,
     resume: Path | None = None,
 ):
     condition, residual = tensor(condition), tensor(residual)
@@ -73,7 +74,7 @@ def fit(
         batches,
         regression,
         steps=updates,
-        learning_rate=0.001,
+        learning_rate=learning_rate,
         out=out,
         resume=resume,
     ), scale

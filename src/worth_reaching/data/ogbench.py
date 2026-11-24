@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 
-from worth_reaching.data.maze_windows import MazeTrajectories
+from worth_reaching.data.trajectory_windows import ContinuousTrajectories
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,7 +18,7 @@ class GoalBatch:
 
 
 @dataclass(frozen=True, slots=True)
-class StateArchive(MazeTrajectories):
+class StateArchive(ContinuousTrajectories):
     rows: NDArray[np.int64]
     fingerprint: str
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from worth_reaching.data.maze_windows import MaskedBatch, MazeTrajectories
+from worth_reaching.data.trajectory_windows import ContinuousTrajectories, MaskedBatch
 
 JOINTS = 7
 BLOCKS = 4
@@ -42,7 +42,10 @@ def stack_goal(
 
 
 def sample_windows(
-    data: MazeTrajectories, rng: np.random.Generator, windows: int, **settings: int
+    data: ContinuousTrajectories,
+    rng: np.random.Generator,
+    windows: int,
+    **settings: int,
 ) -> MaskedBatch:
     batch = data.sample_windows(rng, windows, **settings)
     return MaskedBatch(
@@ -50,7 +53,7 @@ def sample_windows(
     )
 
 
-def _read_clips(paths: list[Path]) -> tuple[MazeTrajectories, str]:
+def _read_clips(paths: list[Path]) -> tuple[ContinuousTrajectories, str]:
     observations = []
     fingerprint = sha256()
     for path in paths:
@@ -64,7 +67,7 @@ def _read_clips(paths: list[Path]) -> tuple[MazeTrajectories, str]:
             clip[: CLIP_STRIDE * CLIP_LIMIT : CLIP_STRIDE].astype(np.float32)
         )
     states = np.concatenate(observations)
-    return MazeTrajectories(
+    return ContinuousTrajectories(
         states,
         np.empty((len(states), 0), np.float32),
         np.cumsum([len(clip) for clip in observations]) - 1,
@@ -73,7 +76,7 @@ def _read_clips(paths: list[Path]) -> tuple[MazeTrajectories, str]:
 
 def load_clips(
     directory: Path,
-) -> tuple[MazeTrajectories, MazeTrajectories, dict]:
+) -> tuple[ContinuousTrajectories, ContinuousTrajectories, dict]:
     files = sorted(directory.glob("data_*.npy"))
     if len(files) < 5:
         raise ValueError(f"Expected Diffuser demonstration clips in {directory}")

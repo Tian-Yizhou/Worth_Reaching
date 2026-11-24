@@ -19,9 +19,8 @@ from worth_reaching.envs.ogbench_tasks import (
     TASKS,
     ManipulationTask,
 )
-from worth_reaching.evaluation.maze_planning import Policy, RecedingGoals
 from worth_reaching.models import gcbc
-from worth_reaching.models.maze_completion import CompletionConfig, fit
+from worth_reaching.models.continuous_completion import CompletionConfig, fit
 from worth_reaching.models.training import (
     describe,
     regression,
@@ -31,6 +30,7 @@ from worth_reaching.models.training import (
     validate_resume,
     weights,
 )
+from worth_reaching.planning.receding_goals import Policy, RecedingGoals
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,7 +174,9 @@ def run(
     scale = np.maximum(train.observations.std(axis=0, dtype=np.float64), 1e-3).astype(
         np.float32
     )
-    previous = validate_resume(out, resume)
+    previous = validate_resume(
+        out, resume, legacy_defaults={"training": {"learning_rate": 0.001}}
+    )
     actor, actor_weights = _fit_executor(
         train,
         (mean, scale),

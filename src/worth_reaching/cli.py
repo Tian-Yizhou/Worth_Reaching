@@ -6,7 +6,8 @@ from pathlib import Path
 
 from worth_reaching.compute import ComputeConfig
 from worth_reaching.envs.ogbench_tasks import PUZZLE_BOARDS, SCENE, TASKS
-from worth_reaching.envs.pointmaze_tasks import TASKS as POINTMAZE_TASKS
+from worth_reaching.recipes import completion_recipe
+from worth_reaching.tasks.pointmaze.cli import register_commands as register_pointmaze
 
 
 def _devices(args: argparse.Namespace) -> dict[str, object]:
@@ -58,32 +59,11 @@ def _prepare_windows(args: argparse.Namespace) -> dict[str, object]:
     return prepare_craftax_windows(args.collection, args.out, config)
 
 
-def _predictor_stopping(args: argparse.Namespace):
-    from worth_reaching.models.training import PredictorStopping
-
-    settings = {
-        key: value
-        for key, value in (
-            ("val_every", args.predictor_val_every),
-            ("patience", args.predictor_patience),
-        )
-        if value is not None
-    }
-    return PredictorStopping(**settings)
-
-
 def _train_completion(args: argparse.Namespace) -> dict[str, object]:
     from worth_reaching.evaluation.completion import run_completion_training
     from worth_reaching.models.completion import TrainingConfig
 
-    config = TrainingConfig(
-        seed=args.seed,
-        encoder_updates=args.encoder_updates,
-        updates=args.updates,
-        history_length=args.history_length,
-        queries_per_window=args.queries_per_window,
-        predictor_stopping=_predictor_stopping(args),
-    )
+    config = completion_recipe(TrainingConfig(), args)
     return run_completion_training(
         args.out,
         config,
@@ -161,19 +141,9 @@ def _antmaze_waypoints(args: argparse.Namespace) -> dict[str, object]:
 def _antmaze_latent(args: argparse.Namespace) -> dict[str, object]:
     from worth_reaching.evaluation.antmaze import EvalConfig
     from worth_reaching.evaluation.antmaze_latent import run
-    from worth_reaching.models.maze_completion import CompletionConfig
+    from worth_reaching.models.continuous_completion import CompletionConfig
 
-    config = CompletionConfig(
-        seed=args.seed,
-        windows=args.windows,
-        history=args.history,
-        queries=args.queries,
-        codec_updates=args.codec_updates,
-        predictor_updates=args.predictor_updates,
-        flow_updates=args.flow_updates,
-        predictor_stopping=_predictor_stopping(args),
-        candidates=args.candidates,
-    )
+    config = completion_recipe(CompletionConfig(), args)
     evaluation = EvalConfig(args.eval_split, args.eval_repeats, args.eval_steps)
     return run(
         args.dataset,
@@ -188,74 +158,24 @@ def _antmaze_latent(args: argparse.Namespace) -> dict[str, object]:
     )
 
 
-def _pointmaze_latent(args: argparse.Namespace) -> dict[str, object]:
-    from worth_reaching.evaluation.pointmaze import run
-    from worth_reaching.models.maze_completion import BudgetedCompletionConfig
-
-    return run(
-        args.data_dir,
-        args.out,
-        BudgetedCompletionConfig(
-            seed=args.seed,
-            windows=args.windows,
-            codec_updates=args.codec_updates,
-            predictor_updates=args.predictor_updates,
-            flow_updates=args.flow_updates,
-            predictor_stopping=_predictor_stopping(args),
-        ),
-        task_name=args.task,
-        split=args.eval_split,
-        repeats=args.eval_repeats,
-        budgets=[args.eval_steps] if args.eval_steps is not None else args.eval_budgets,
-        prediction_span=args.prediction_span,
-        resume=args.resume,
-    )
-
-
-def _pointmaze_first_targets(args: argparse.Namespace) -> dict[str, object]:
-    from worth_reaching.evaluation.pointmaze_probe import run
-
-    return run(
-        args.data_dir,
-        args.runs,
-        args.out,
-        args.max_starts,
-        compare_continuations=args.compare_continuations,
-    )
-
-
-def _pointmaze_latent_energy(args: argparse.Namespace) -> dict[str, object]:
-    from worth_reaching.evaluation.pointmaze_energy import run
-
-    return run(
-        args.data_dir,
-        args.runs,
-        args.out,
-        split=args.eval_split,
-        repeats=args.eval_repeats,
-        prefix_length=args.prefix_length,
-        candidates=args.candidates,
-        density_samples=args.density_samples,
-    )
-
-
 def _kuka_latent(args: argparse.Namespace) -> dict[str, object]:
     from worth_reaching.evaluation.kuka import run
-    from worth_reaching.models.maze_completion import CompletionConfig
+    from worth_reaching.models.continuous_completion import CompletionConfig
 
     return run(
         args.source_dir,
         args.data_dir,
         args.out,
-        CompletionConfig(
-            seed=args.seed,
-            windows=args.windows,
-            max_horizon=256,
-            latent_size=24,
-            codec_updates=args.codec_updates,
-            predictor_updates=args.predictor_updates,
-            flow_updates=args.flow_updates,
-            predictor_stopping=_predictor_stopping(args),
+        completion_recipe(
+            CompletionConfig(
+                windows=4000,
+                max_horizon=256,
+                latent_size=24,
+                codec_updates=250,
+                predictor_updates=600,
+                flow_updates=300,
+            ),
+            args,
         ),
         split=args.eval_split,
         repeats=args.eval_repeats,
@@ -266,21 +186,22 @@ def _kuka_latent(args: argparse.Namespace) -> dict[str, object]:
 
 def _manipulation_latent(args: argparse.Namespace) -> dict[str, object]:
     from worth_reaching.evaluation.ogbench_manipulation import ExecutorConfig, run
-    from worth_reaching.models.maze_completion import CompletionConfig
+    from worth_reaching.models.continuous_completion import CompletionConfig
 
     benchmark = PUZZLE_BOARDS[args.board] if args.board is not None else SCENE
     return run(
         benchmark,
         args.data_dir,
         args.out,
-        CompletionConfig(
-            seed=args.seed,
-            windows=args.windows,
-            max_horizon=benchmark.action_limit,
-            codec_updates=args.codec_updates,
-            predictor_updates=args.predictor_updates,
-            flow_updates=args.flow_updates,
-            predictor_stopping=_predictor_stopping(args),
+        completion_recipe(
+            CompletionConfig(
+                windows=8000,
+                max_horizon=benchmark.action_limit,
+                codec_updates=350,
+                predictor_updates=1000,
+                flow_updates=450,
+            ),
+            args,
         ),
         ExecutorConfig(updates=args.executor_updates),
         split=args.eval_split,
@@ -344,11 +265,11 @@ def main() -> None:
     source.add_argument("--grid", action="store_true", help="Use paired grid routes")
     source.add_argument("--windows", type=Path, help="Use exported Craftax windows")
     training.add_argument("--out", type=Path, required=True)
-    training.add_argument("--seed", type=int, default=7)
-    training.add_argument("--encoder-updates", type=int, default=250)
-    training.add_argument("--updates", type=int, default=600)
-    training.add_argument("--history-length", type=int, default=16)
-    training.add_argument("--queries-per-window", type=int, default=16)
+    training.add_argument("--seed", type=int)
+    training.add_argument("--encoder-updates", type=int)
+    training.add_argument("--updates", type=int)
+    training.add_argument("--history-length", type=int)
+    training.add_argument("--queries-per-window", type=int)
     training.add_argument(
         "--evaluate-test", action="store_true", help="Score frozen grid test worlds"
     )
@@ -441,90 +362,24 @@ def main() -> None:
     latent.add_argument(
         "--starts", type=Path, help="Reuse a matching AntMaze start bank"
     )
-    latent.add_argument("--seed", type=int, default=7)
-    latent.add_argument("--windows", type=int, default=16000)
-    latent.add_argument("--history", type=int, default=4)
-    latent.add_argument("--queries", type=int, default=8)
-    latent.add_argument("--candidates", type=int, default=4)
+    latent.add_argument("--seed", type=int)
+    latent.add_argument("--windows", type=int)
+    latent.add_argument("--history", type=int)
+    latent.add_argument("--queries", type=int)
+    latent.add_argument("--candidates", type=int)
     latent.add_argument(
         "--probe-first-candidates",
         action="store_true",
         help="Compare each sampled first target under a shared closed-loop continuation",
     )
-    latent.add_argument("--codec-updates", type=int, default=500)
-    latent.add_argument("--predictor-updates", type=int, default=1200)
-    latent.add_argument("--flow-updates", type=int, default=700)
+    latent.add_argument("--codec-updates", type=int)
+    latent.add_argument("--predictor-updates", type=int)
+    latent.add_argument("--flow-updates", type=int)
     latent.add_argument("--eval-split", choices=("dev", "test"), default="dev")
     latent.add_argument("--eval-repeats", type=int, default=2)
     latent.add_argument("--eval-steps", type=int, default=1000)
     latent.set_defaults(run=_antmaze_latent, extra="ogbench")
-    pointmaze = commands.add_parser(
-        "pointmaze-latent",
-        help="Train and evaluate latent completion on Maze2D U-Maze, Medium or Large",
-    )
-    pointmaze.add_argument("--task", choices=POINTMAZE_TASKS, default="medium")
-    pointmaze.add_argument(
-        "--data-dir", type=Path, default=Path("results/datasets/minari")
-    )
-    pointmaze.add_argument("--out", type=Path, required=True)
-    pointmaze.add_argument("--seed", type=int, default=7)
-    pointmaze.add_argument("--windows", type=int, default=4000)
-    pointmaze.add_argument("--codec-updates", type=int, default=250)
-    pointmaze.add_argument("--predictor-updates", type=int, default=600)
-    pointmaze.add_argument("--flow-updates", type=int, default=300)
-    pointmaze.add_argument("--eval-split", choices=("dev", "test"), default="dev")
-    pointmaze.add_argument("--eval-repeats", type=int, default=6)
-    pointmaze_budgets = pointmaze.add_mutually_exclusive_group()
-    pointmaze_budgets.add_argument(
-        "--eval-steps",
-        type=int,
-        help="Action budget for one evaluation (defaults to the official limit)",
-    )
-    pointmaze_budgets.add_argument(
-        "--eval-budgets",
-        type=int,
-        nargs="+",
-        help="Compare multiple action budgets with the same checkpoint and resets",
-    )
-    pointmaze.add_argument(
-        "--prediction-span",
-        type=int,
-        help="Maximum span for each model prediction (defaults to archive coverage)",
-    )
-    pointmaze.set_defaults(run=_pointmaze_latent, extra="pointmaze")
-    first_targets = commands.add_parser(
-        "pointmaze-first-targets",
-        help="Evaluate frozen PointMaze first targets from matched resets",
-    )
-    first_targets.add_argument("--runs", nargs="+", type=Path, required=True)
-    first_targets.add_argument(
-        "--data-dir", type=Path, default=Path("results/datasets/minari")
-    )
-    first_targets.add_argument("--out", type=Path, required=True)
-    first_targets.add_argument(
-        "--max-starts", type=int, help="Limit starts for a smoke check"
-    )
-    first_targets.add_argument(
-        "--compare-continuations",
-        action="store_true",
-        help="Use the first sampled target and compare direct and replanning continuations",
-    )
-    first_targets.set_defaults(run=_pointmaze_first_targets, extra="pointmaze")
-    latent_energy = commands.add_parser(
-        "pointmaze-latent-energy",
-        help="Test frozen latent energy against matched PointMaze candidate attempts",
-    )
-    latent_energy.add_argument("--runs", nargs="+", type=Path, required=True)
-    latent_energy.add_argument(
-        "--data-dir", type=Path, default=Path("results/datasets/minari")
-    )
-    latent_energy.add_argument("--out", type=Path, required=True)
-    latent_energy.add_argument("--eval-split", choices=("dev", "test"), default="test")
-    latent_energy.add_argument("--eval-repeats", type=int, default=64)
-    latent_energy.add_argument("--prefix-length", type=int, default=1)
-    latent_energy.add_argument("--candidates", type=int, default=16)
-    latent_energy.add_argument("--density-samples", type=int, default=256)
-    latent_energy.set_defaults(run=_pointmaze_latent_energy, extra="pointmaze")
+    pointmaze = register_pointmaze(commands)
     kuka = commands.add_parser(
         "kuka-latent",
         help="Train and evaluate latent completion on conditional Kuka stacking",
@@ -538,11 +393,11 @@ def main() -> None:
         default=Path("results/datasets/diffuser-kuka/kuka_dataset"),
     )
     kuka.add_argument("--out", type=Path, required=True)
-    kuka.add_argument("--seed", type=int, default=7)
-    kuka.add_argument("--windows", type=int, default=4000)
-    kuka.add_argument("--codec-updates", type=int, default=250)
-    kuka.add_argument("--predictor-updates", type=int, default=600)
-    kuka.add_argument("--flow-updates", type=int, default=300)
+    kuka.add_argument("--seed", type=int)
+    kuka.add_argument("--windows", type=int)
+    kuka.add_argument("--codec-updates", type=int)
+    kuka.add_argument("--predictor-updates", type=int)
+    kuka.add_argument("--flow-updates", type=int)
     kuka.add_argument("--eval-split", choices=("dev", "test"), default="dev")
     kuka.add_argument("--eval-repeats", type=int, default=4)
     kuka.add_argument("--eval-steps", type=int, default=384)
@@ -562,12 +417,12 @@ def main() -> None:
             "--data-dir", type=Path, default=Path("results/datasets/ogbench")
         )
         command.add_argument("--out", type=Path, required=True)
-        command.add_argument("--seed", type=int, default=7)
-        command.add_argument("--windows", type=int, default=8000)
+        command.add_argument("--seed", type=int)
+        command.add_argument("--windows", type=int)
         command.add_argument("--executor-updates", type=int, default=2500)
-        command.add_argument("--codec-updates", type=int, default=350)
-        command.add_argument("--predictor-updates", type=int, default=1000)
-        command.add_argument("--flow-updates", type=int, default=450)
+        command.add_argument("--codec-updates", type=int)
+        command.add_argument("--predictor-updates", type=int)
+        command.add_argument("--flow-updates", type=int)
         command.add_argument(
             "--task", type=int, choices=TASKS, help="Select one official task"
         )
@@ -592,6 +447,9 @@ def main() -> None:
             "--resume", type=Path, help="Continue from a compatible Lightning run"
         )
     for command in (training, latent, pointmaze, kuka, scene, puzzle):
+        command.add_argument(
+            "--config", type=Path, help="TOML completion recipe with a [model] table"
+        )
         command.add_argument(
             "--predictor-val-every",
             type=int,

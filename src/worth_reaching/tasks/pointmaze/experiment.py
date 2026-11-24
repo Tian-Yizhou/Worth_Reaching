@@ -10,21 +10,21 @@ import numpy as np
 from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
-from worth_reaching.data.maze_windows import MaskedBatch
-from worth_reaching.data.pointmaze import (
-    ACTION_SIZE,
-    load_dataset,
-    split_trajectories,
-)
-from worth_reaching.envs.pointmaze import SEED_BASE, PointMaze
-from worth_reaching.envs.pointmaze_tasks import TASKS
-from worth_reaching.evaluation.maze_planning import Policy, RecedingGoals
-from worth_reaching.models.maze_completion import (
+from worth_reaching.data.trajectory_windows import MaskedBatch
+from worth_reaching.models.continuous_completion import (
     BudgetedCompletionConfig,
     LearnedCompletion,
     fit,
 )
 from worth_reaching.models.training import describe, stream_seed, validate_resume
+from worth_reaching.planning.receding_goals import Policy, RecedingGoals
+from worth_reaching.tasks.pointmaze.dataset import (
+    ACTION_SIZE,
+    load_dataset,
+    split_trajectories,
+)
+from worth_reaching.tasks.pointmaze.environment import SEED_BASE, PointMaze
+from worth_reaching.tasks.pointmaze.spec import TASKS
 
 ALIGNED_SCHEMA = "pointmaze_latent_completion_v3"
 BUDGET_SCHEMA = "pointmaze_latent_completion_v4"
@@ -252,6 +252,12 @@ def run(
         out.mkdir(parents=True, exist_ok=False)
         evaluation = {"split": split, "seeds": seeds}
         multiple = len(budgets) > 1
+        input_spec = {
+            "observation_size": train.observations.shape[-1],
+            "goal_size": training.context.goal.shape[-1],
+            "action_size": train.actions.shape[-1],
+            "action_type": "continuous",
+        }
         manifest = {
             "schema": BUDGET_SCHEMA,
             "task": task_name,
@@ -263,6 +269,7 @@ def run(
             "dataset": task.dataset_id,
             "dataset_files_sha256": file_hashes,
             "training": asdict(config),
+            "public_inputs": input_spec,
             "window_sampling": {
                 "span_source": horizon_source,
                 "train": _window_coverage(training, prediction_span, train_support),
@@ -293,7 +300,14 @@ def run(
             scale,
             config,
             out / "checkpoints",
-            validate_resume(out, resume),
+            validate_resume(
+                out,
+                resume,
+                legacy_defaults={
+                    "training": {"learning_rate": 0.001},
+                    "public_inputs": input_spec,
+                },
+            ),
         )
         metrics = model.validate(validation_windows)
         write_json(out / "validation.json", metrics)

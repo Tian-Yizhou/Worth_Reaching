@@ -222,11 +222,15 @@ def resume_checkpoint(directory: Path) -> Path:
     raise ValueError(f"No Lightning checkpoint in {directory}")
 
 
-def validate_resume(out: Path, previous: Path | None) -> Path | None:
+def validate_resume(
+    out: Path, previous: Path | None, *, legacy_defaults: dict[str, dict] | None = None
+) -> Path | None:
     if previous is None:
         return None
     current = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     saved = json.loads((previous / "manifest.json").read_text(encoding="utf-8"))
+    for section, defaults in (legacy_defaults or {}).items():
+        saved[section] = {**defaults, **saved.get(section, {})}
     ignored = {"code_revision", "compute"}
     if any(
         saved.get(key) != value for key, value in current.items() if key not in ignored

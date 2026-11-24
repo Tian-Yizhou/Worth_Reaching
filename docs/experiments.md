@@ -50,6 +50,20 @@ Indices are zero-based within any existing `CUDA_VISIBLE_DEVICES` list. The conf
 
 The completion predictor, route flow, feedback update and GCBC trainer use Lightning's single-host DDP. Batch size is global, so each update uses the same examples on one or more devices. Run manifests record the framework, backend, device count and visibility mask. Simulator rollout loops execute serially. [Lightning distributed strategies](https://lightning.ai/docs/pytorch/stable/reference/accelerators/gpu_intermediate)
 
+## Configure a completion model
+
+`wr train-completion`, `antmaze-latent`, `pointmaze-latent`, `kuka-latent`, `scene-latent` and `puzzle-latent` accept `--config PATH` after the subcommand. A TOML `[model]` table overrides the command's defaults. Explicit command-line options take precedence. The run manifest saves the resolved settings alongside the dataset and split information.
+
+```bash
+run_dir="$(mktemp -d results/pointmaze-recipe.XXXXXX)"
+uv run --no-sync wr pointmaze-latent --config configs/pointmaze/completion-smoke.toml \
+  --task medium --seed 7 --eval-split dev --eval-repeats 1 --out "$run_dir/medium"
+```
+
+For a prepared Craftax window corpus, use `wr train-completion --windows PATH --config configs/craftax/completion-smoke.toml --out RUN`. Both example files use two optimizer updates per stage to check the training path.
+
+Both model families accept `width`, `latent_size`, `batch_size`, `learning_rate`, `seed`, `predictor_val_every` and `predictor_patience`. For the continuous model, use `history`, `queries`, `windows`, `codec_updates`, `predictor_updates`, `flow_updates` and `candidates`. Its batch size sets the codec and predictor batches. For Craftax and grid predictor training, use `history_length`, `queries_per_window`, `encoder_updates` and `updates`. Each task supplies its public input and goal format. In PointMaze, use `--prediction-span` for the maximum prediction span and `--eval-budgets` to evaluate several action budgets using one set of weights.
+
 ## Select a predictor checkpoint
 
 The predictor monitors `val_latent_mse`, the mean squared error at valid masked query positions in fixed development windows encoded by the frozen codec. Set `--predictor-val-every` to change the default interval of 200 updates and `--predictor-patience` to change the default of five validation checks without improvement. The update budget caps training. A budget shorter than the interval is validated at its last update. The grid and Craftax goal-conditioned and goal-blind predictors share validation windows and stopping settings and select their checkpoints independently. [Lightning EarlyStopping](https://lightning.ai/docs/pytorch/stable/optional-api/api/lightning.pytorch.callbacks.EarlyStopping)
