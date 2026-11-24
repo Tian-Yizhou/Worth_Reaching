@@ -40,7 +40,7 @@ The trajectory completion model will use public data from `data/`. Its executor 
 
 ## Training on multiple devices
 
-New model training uses PyTorch Lightning. Lightning runs DDP on one host and manages checkpointing and logging for each stage. A step-indexed sampler supplies the same global batch across device counts. A row mask excludes padding, and the loss uses the global count of valid elements to preserve its weighting under DDP. A stateful dataloader saves its cursor with the optimizer and model. The process that launches training handles serial simulator evaluation after the workers finish. Craftax simulation and the released expert policy use JAX. [Lightning Trainer](https://lightning.ai/docs/pytorch/stable/core-api/trainer) · [Compute configuration](experiments.md#compute-devices)
+New model training uses PyTorch Lightning. Lightning runs DDP on one host and manages checkpointing and logging for each stage. A step-indexed sampler supplies the same global batch across device counts. A row mask excludes padding, and the loss uses the global count of valid elements to preserve its weighting under DDP. A stateful dataloader saves its cursor with the optimizer and model. Scene and Puzzle can evaluate independent starts in CPU processes after training. Frozen Scene evaluation also supports an experimental CUDA physics path through Warp. Each evaluator keeps both arms of a matched start together. Craftax simulation and the released expert policy use JAX. [Lightning Trainer](https://lightning.ai/docs/pytorch/stable/core-api/trainer) · [Scene evaluation backends](experiments.md#compare-native-cpu-and-batched-cuda-scene-evaluation)
 
 ## Execution and data contracts
 

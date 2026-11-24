@@ -3,19 +3,19 @@ revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'linux' and extra != 'extra-14-worth-reaching-training' and extra == 'extra-14-worth-reaching-training-cpu'",
-    "python_full_version == '3.13.*' and sys_platform == 'linux' and extra != 'extra-14-worth-reaching-training' and extra == 'extra-14-worth-reaching-training-cpu'",
-    "python_full_version < '3.13' and sys_platform == 'linux' and extra != 'extra-14-worth-reaching-training' and extra == 'extra-14-worth-reaching-training-cpu'",
     "python_full_version >= '3.14' and sys_platform != 'linux' and extra != 'extra-14-worth-reaching-training' and extra == 'extra-14-worth-reaching-training-cpu'",
-    "python_full_version == '3.13.*' and sys_platform != 'linux' and extra != 'extra-14-worth-reaching-training' and extra == 'extra-14-worth-reaching-training-cpu'",
-    "python_full_version < '3.13' and sys_platform != 'linux' and extra != 'extra-14-worth-reaching-training' and extra == 'extra-14-worth-reaching-training-cpu'",
     "python_full_version >= '3.14' and sys_platform == 'linux' and extra == 'extra-14-worth-reaching-training' and extra != 'extra-14-worth-reaching-training-cpu'",
-    "python_full_version == '3.13.*' and sys_platform == 'linux' and extra == 'extra-14-worth-reaching-training' and extra != 'extra-14-worth-reaching-training-cpu'",
-    "python_full_version < '3.13' and sys_platform == 'linux' and extra == 'extra-14-worth-reaching-training' and extra != 'extra-14-worth-reaching-training-cpu'",
     "python_full_version >= '3.14' and sys_platform != 'linux' and extra == 'extra-14-worth-reaching-training' and extra != 'extra-14-worth-reaching-training-cpu'",
-    "python_full_version == '3.13.*' and sys_platform != 'linux' and extra == 'extra-14-worth-reaching-training' and extra != 'extra-14-worth-reaching-training-cpu'",
-    "python_full_version < '3.13' and sys_platform != 'linux' and extra == 'extra-14-worth-reaching-training' and extra != 'extra-14-worth-reaching-training-cpu'",
     "python_full_version >= '3.14' and extra != 'extra-14-worth-reaching-training' and extra != 'extra-14-worth-reaching-training-cpu'",
+    "python_full_version == '3.13.*' and sys_platform == 'linux' and extra != 'extra-14-worth-reaching-training' and extra == 'extra-14-worth-reaching-training-cpu'",
+    "python_full_version == '3.13.*' and sys_platform != 'linux' and extra != 'extra-14-worth-reaching-training' and extra == 'extra-14-worth-reaching-training-cpu'",
+    "python_full_version == '3.13.*' and sys_platform == 'linux' and extra == 'extra-14-worth-reaching-training' and extra != 'extra-14-worth-reaching-training-cpu'",
+    "python_full_version == '3.13.*' and sys_platform != 'linux' and extra == 'extra-14-worth-reaching-training' and extra != 'extra-14-worth-reaching-training-cpu'",
     "python_full_version == '3.13.*' and extra != 'extra-14-worth-reaching-training' and extra != 'extra-14-worth-reaching-training-cpu'",
+    "python_full_version < '3.13' and sys_platform == 'linux' and extra != 'extra-14-worth-reaching-training' and extra == 'extra-14-worth-reaching-training-cpu'",
+    "python_full_version < '3.13' and sys_platform != 'linux' and extra != 'extra-14-worth-reaching-training' and extra == 'extra-14-worth-reaching-training-cpu'",
+    "python_full_version < '3.13' and sys_platform == 'linux' and extra == 'extra-14-worth-reaching-training' and extra != 'extra-14-worth-reaching-training-cpu'",
+    "python_full_version < '3.13' and sys_platform != 'linux' and extra == 'extra-14-worth-reaching-training' and extra != 'extra-14-worth-reaching-training-cpu'",
     "python_full_version < '3.13' and extra != 'extra-14-worth-reaching-training' and extra != 'extra-14-worth-reaching-training-cpu'",
 ]
 conflicts = [[
@@ -1999,6 +1999,29 @@ wheels = [
 ]
 
 [[package]]
+name = "mujoco-mjx"
+version = "3.3.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "absl-py" },
+    { name = "etils", extra = ["epath"] },
+    { name = "jax" },
+    { name = "jaxlib" },
+    { name = "mujoco" },
+    { name = "scipy" },
+    { name = "trimesh" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/26/28/3748ac7baf7cddd81af3e2296c85e6a83fab7318c845589670cee5c98a0e/mujoco_mjx-3.3.7.tar.gz", hash = "sha256:2bd1d07a7e3824c366a38f7335a29f321fc6e98e13cd1111c523858f74a31a3f", size = 6876211, upload-time = "2025-10-14T17:35:00.575Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/32/2aad9e9107fcc6dd6cc503e74ad78e2a6ed74a55cbc2498b3a5eac9104f0/mujoco_mjx-3.3.7-py3-none-any.whl", hash = "sha256:e56a7e979f4c23edabd7a422f9927968b5b7ef6382a07face9bdfc42006e8bb8", size = 6959457, upload-time = "2025-10-14T17:34:58.135Z" },
+]
+
+[package.optional-dependencies]
+warp = [
+    { name = "warp-lang" },
+]
+
+[[package]]
 name = "multidict"
 version = "7.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3713,6 +3736,18 @@ wheels = [
 ]
 
 [[package]]
+name = "trimesh"
+version = "5.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/98/38/e6dfd38aec853a6699a1fd765c68d47fdacdb562761d80a5dd0cef85f6d1/trimesh-5.2.2.tar.gz", hash = "sha256:720b37ba1c72617c96fa1906cfd8beccd7abab808dbd63799d8600a0e95a891a", size = 894423, upload-time = "2026-11-22T02:23:11.48Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/65/6a/b762dba087a749a45db73b0dde30c00661f9181dbe3ca4cba1cab28fcdae/trimesh-5.2.2-py3-none-any.whl", hash = "sha256:579ab2cf8e4eef32d15b2915843f16dac87c8142530c833309c28c3e54dee7c9", size = 755355, upload-time = "2026-11-22T02:23:09.474Z" },
+]
+
+[[package]]
 name = "triton"
 version = "3.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3825,6 +3860,17 @@ wheels = [
 ]
 
 [[package]]
+name = "warp-lang"
+version = "1.9.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a8/35/bde91ead2c8e6f9f3a1c0faaac85724b6d6411ce2c6743ffe2b94e94b6bc/warp_lang-1.9.1-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:2211e0cd9332ca44193801285cd1293c0b7580932da8da32e18d70b832adac12", size = 132023480, upload-time = "2025-10-01T07:35:49.783Z" },
+]
+
+[[package]]
 name = "worth-reaching"
 version = "0.1.0"
 source = { editable = "." }
@@ -3858,6 +3904,9 @@ pointmaze = [
     { name = "minari", extra = ["hdf5", "hf"] },
     { name = "mujoco" },
     { name = "optax" },
+]
+scene-warp = [
+    { name = "mujoco-mjx", extra = ["warp"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 stacking = [
     { name = "flax" },
@@ -3906,6 +3955,7 @@ requires-dist = [
     { name = "minigrid", marker = "extra == 'minigrid'", specifier = "==3.2.0" },
     { name = "mujoco", marker = "extra == 'ogbench'", specifier = "==3.3.7" },
     { name = "mujoco", marker = "extra == 'pointmaze'", specifier = "==3.3.7" },
+    { name = "mujoco-mjx", extras = ["warp"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'scene-warp'", specifier = "==3.3.7" },
     { name = "ogbench", marker = "extra == 'ogbench'", specifier = "==1.1.5" },
     { name = "optax", marker = "extra == 'craftax'", specifier = ">=0.2,<1" },
     { name = "optax", marker = "extra == 'ogbench'", specifier = ">=0.2,<1" },
@@ -3920,7 +3970,7 @@ requires-dist = [
     { name = "torchdata", marker = "extra == 'training'", specifier = ">=0.11,<1" },
     { name = "torchdata", marker = "extra == 'training-cpu'", specifier = ">=0.11,<1" },
 ]
-provides-extras = ["minigrid", "craftax", "ogbench", "pointmaze", "stacking", "cuda12", "training", "training-cpu"]
+provides-extras = ["minigrid", "craftax", "ogbench", "scene-warp", "pointmaze", "stacking", "cuda12", "training", "training-cpu"]
 
 [package.metadata.requires-dev]
 dev = [

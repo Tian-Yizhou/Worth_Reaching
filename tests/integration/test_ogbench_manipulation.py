@@ -65,7 +65,7 @@ def test_puzzle_boards_restore_public_goal_and_native_physics(
     [
         (
             "scene-latent",
-            ["--task", "4", "--task", "5"],
+            ["--task", "4", "--task", "5", "--eval-workers", "2"],
             [4, 5],
             "scene",
             40,
@@ -138,6 +138,7 @@ def test_manipulation_cli_trains_and_reuses_start_and_controller(
     assert manifest["dataset"] == f"{environment}-play-v0"
     assert manifest["training"]["max_horizon"] == limit
     assert manifest["evaluation"]["tasks"] == tasks
+    assert manifest["compute"]["eval_workers"] == len(tasks)
     assert manifest["observation"] == "official_state"
     assert manifest["train_sha256"] != manifest["validation_sha256"]
     episodes = json.loads((out / "episodes.json").read_text())
@@ -161,6 +162,37 @@ def test_manipulation_cli_trains_and_reuses_start_and_controller(
     assert json.loads((out / "summary.json").read_text())[
         "evaluation_environment_steps"
     ] == sum(row["steps"] for rows in episodes.values() for row in rows)
+    if command == "scene-latent":
+        frozen = tmp_path / "frozen"
+        subprocess.run(
+            [
+                "wr",
+                "scene-evaluate",
+                "--checkpoint",
+                out,
+                "--out",
+                frozen,
+                "--task",
+                "4",
+                "--task",
+                "5",
+                "--eval-repeats",
+                "1",
+                "--eval-steps",
+                "12",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert json.loads((frozen / "episodes.json").read_text()) == episodes
+        with (
+            np.load(out / "trajectories.npz", allow_pickle=False) as parallel,
+            np.load(frozen / "trajectories.npz", allow_pickle=False) as serial,
+        ):
+            assert parallel.files == serial.files
+            for key in parallel:
+                np.testing.assert_array_equal(parallel[key], serial[key])
 
 
 def test_scene_reachability_cli_pairs_recorded_actions_with_frozen_actor(tmp_path):
