@@ -55,6 +55,14 @@ On the 16 test layouts, outcome scoring raised two-stage latent success from 37.
 
 Track recurrence in successful trajectories as a complementary measure of progress. For an initially closed drawer, an interpretable landmark is a sufficiently open drawer before insertion. Count a recurring state once per eligible trajectory and compare matched successes and failures at the same task stage. Prospective attempts estimate the gain from explicitly pursuing that region under the shared controller.
 
+### Measure reachability in Scene
+
+Use the achieved-waypoint diagnostic to measure which targets a frozen executor can reach from a recorded start by a given deadline. Use matched replay to check that the archived segment can be reproduced and report arrival by demonstration offset and action budget. Keep this local control diagnostic separate from the official terminal-task evaluation. [Scene waypoint protocol](experiments.md#test-scene-waypoint-reachability)
+
+After qualifying an executor, collect prospective attempts on decoded proposals and matched-time replay goals from the same starts. Fit an arrival probability conditioned on public history, the proposed waypoint and its deadline. Use `−log(max(p_arrival, ε))` as a soft energy and compare it with an arrival mask calibrated on development attempts. Reserve unconditional masks for known invalid outputs. A rare proposal or a miss by one executor provides limited evidence of physical infeasibility. Use only rollout outcomes as labels. Keep episode-level splits and report arrival calibration on held-out candidates, including low-support candidates.
+
+Compare the mask and soft energy with an unfiltered bank under equal proposal and action budgets, sharing the executor and terminal-success scorer. Measure which candidates each rule discards, how many viable routes it retains, and paired terminal success. For sequences, update the next segment's reachability from the actual arrival history and remaining time. Terminal outcome remains a separate label, including when an attempt misses its waypoint and later recovers.
+
 ### 3. Compose alternative routes under a budget
 
 The central case is a single start and terminal objective with several feasible routes whose value depends on resources, uncertainty and time. Generate latent goals from public histories. Use a model of controlled transitions to score possible target orders by the chance of terminal success under the actual budget. Compare the original joint samples, recombined goals, individual targets, and matched-context replay with one executor and a common proposal cap. Reuse a fixed candidate bank across budgets to isolate selection from changing proposals.
