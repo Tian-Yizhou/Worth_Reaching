@@ -43,7 +43,7 @@ Choose an experiment below for its data preparation and run commands.
 
 | Task | What you can test |
 | --- | --- |
-| [Dependency grid](docs/experiments.md#compare-ordered-targets-in-the-dependency-grid) | Measure how choosing and ordering intermediate targets changes success when a task requires one or two prerequisites. |
+| [Dependency grid](docs/experiments.md#compare-ordered-targets-in-the-dependency-grid) | Measure the effect of target order, then [test latent proposals](docs/experiments.md#test-frozen-latent-goals-in-the-dependency-grid) against matched-time replay and direct tracking. |
 | [MiniGrid KeyCorridor](docs/experiments.md#replay-a-keycorridor-decision) | Branch at one decision and inspect how a single action changes the outcome at the deadline. |
 | [Two-goal grid](docs/experiments.md#sample-and-execute-alternative-routes) | Switch the terminal goal on the same layout, sample alternate routes and train from execution feedback. |
 | [Craftax-Classic](docs/experiments.md#collect-craftax-trajectories) | Collect expert and random demonstrations, then train on masked windows from episodes that craft an iron pickaxe and survive through the deadline. |
