@@ -1,6 +1,50 @@
 # Running experiments
 
-Use Python 3.12 or newer and run from the repository root. The [quick start](../README.md#quick-start) covers the CPU smoke checks. Artifacts stay in `results/` on the server. Git and the Mac sync scripts exclude the entire directory.
+Use Python 3.12 or newer and run from the repository root. Install the project and the extras for your workflow. For a single CPU rollout with a known outcome, start with KeyCorridor. [Project setup](../README.md#setup) · [KeyCorridor instructions](#replay-a-keycorridor-decision)
+
+## Choose a workflow
+
+Each row lists the experiment extra to pass to `uv sync --locked`. For model training, also select `--extra training-cpu` or `--extra training`. Include all extras you want to keep in the same sync command. Run `uv run --no-sync wr --help` to list commands and `uv run --no-sync wr COMMAND --help` for their options.
+
+| Workflow | Experiment extra | Inputs and next step |
+| --- | --- | --- |
+| [Grid prediction](#train-and-test-latent-trajectory-completion) | `craftax` (Flax serialization) | Generate demonstrations with `train-completion --grid`, use its checkpoint with [grid-routes](#sample-and-execute-alternative-routes), then pass both runs to [grid-feedback](#train-from-execution-feedback). |
+| [Craftax collection](#collect-craftax-trajectories) | `craftax` | Collect worlds with a random policy or the expert checkpoint. [Export windows](#prepare-masked-trajectory-windows) from successful demonstrations and pass them to `train-completion --windows`. |
+| [PointMaze](#run-the-diffuser-maze2d-pilots) | `pointmaze` | Download the corresponding Minari dataset. Train with `pointmaze-latent`, then reuse frozen Medium runs for the [energy comparison](#test-latent-energy-against-terminal-success). |
+| [AntMaze](#train-the-antmaze-gcbc-baseline) | `ogbench` | Train the GCBC actor on the official archive. Reuse its checkpoint and saved starts for [latent planning](#run-learned-latent-planning-in-antmaze) or [waypoint evaluation](#evaluate-antmaze-waypoint-execution). |
+| [Kuka](#run-conditional-kuka-stacking) | `stacking` | Prepare the Diffuser code and demonstrations with the supplied script, then run `kuka-latent`. |
+| OGBench [Scene](#run-state-based-ogbench-scene) and [Puzzle](#run-state-based-ogbench-puzzle) | `ogbench` | Download the play archive for the selected task and run `scene-latent` or `puzzle-latent`. |
+
+For scripts that consume these artifacts in Python, see the [task-package import guide](python-imports.md).
+
+## Replay a KeyCorridor decision
+
+This pilot requires only the MiniGrid extra. It replays the same public action history, branches on the next action, and hands both continuations to the same policy.
+
+```bash
+uv sync --locked --extra minigrid
+mkdir -p results
+run_dir="$(mktemp -d results/keycorridor.XXXXXX)"
+uv run --no-sync wr pilot --config configs/minigrid/keycorridor.toml --out "$run_dir/pilot"
+cat "$run_dir/pilot/summary.json"
+```
+
+With the supplied configuration, turning right succeeds on the final step. Moving forward into the wall ends in a timeout.
+
+## Check a development installation
+
+From the repository root, install the CPU dependencies used by CI and run the repository checks.
+
+```bash
+uv sync --locked --group dev --extra training-cpu --extra minigrid --extra craftax --extra ogbench --extra pointmaze
+uv run --no-sync ruff check .
+uv run --no-sync ruff format --check src tests scripts
+CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu uv run --no-sync pytest
+```
+
+## Run artifacts
+
+Artifacts stay in `results/` on the server. Git and the Mac sync scripts exclude the entire directory.
 
 | Directory | Contents |
 | --- | --- |
@@ -85,6 +129,16 @@ Add any non-default flags from the original run to the resume command. Published
 ## Collect Craftax trajectories
 
 Use `make_iron_pickaxe_and_survive` for trajectory completion. The agent must craft the iron pickaxe by the deadline and live through the last action. The `make_iron_pickaxe` option scores the first craft and remains available for reading or collecting earlier task variants. [Collection contract](architecture.md#craftax-collection-contract)
+
+With the `craftax` extra installed, this short random-policy collection exercises the recorder and split assignment. For training examples, use a collection with successful episodes.
+
+```bash
+mkdir -p results
+collection="$(mktemp -d results/craftax-demo.XXXXXX)/collection"
+uv run --no-sync wr collect --config configs/craftax/iron_pickaxe.toml \
+  --task make_iron_pickaxe_and_survive --out "$collection"
+cat "$collection/summary.json"
+```
 
 The following commands start matching expert and random collections with the same world seeds and step budget. The published PPO-RNN checkpoint supplies the expert actions.
 
