@@ -190,12 +190,12 @@ def _antmaze_latent(args: argparse.Namespace) -> dict[str, object]:
 
 def _pointmaze_latent(args: argparse.Namespace) -> dict[str, object]:
     from worth_reaching.evaluation.pointmaze import run
-    from worth_reaching.models.maze_completion import CompletionConfig
+    from worth_reaching.models.maze_completion import BudgetedCompletionConfig
 
     return run(
         args.data_dir,
         args.out,
-        CompletionConfig(
+        BudgetedCompletionConfig(
             seed=args.seed,
             windows=args.windows,
             codec_updates=args.codec_updates,
@@ -206,7 +206,8 @@ def _pointmaze_latent(args: argparse.Namespace) -> dict[str, object]:
         task_name=args.task,
         split=args.eval_split,
         repeats=args.eval_repeats,
-        limit=args.eval_steps,
+        budgets=[args.eval_steps] if args.eval_steps is not None else args.eval_budgets,
+        prediction_span=args.prediction_span,
         resume=args.resume,
     )
 
@@ -473,10 +474,22 @@ def main() -> None:
     pointmaze.add_argument("--flow-updates", type=int, default=300)
     pointmaze.add_argument("--eval-split", choices=("dev", "test"), default="dev")
     pointmaze.add_argument("--eval-repeats", type=int, default=6)
-    pointmaze.add_argument(
+    pointmaze_budgets = pointmaze.add_mutually_exclusive_group()
+    pointmaze_budgets.add_argument(
         "--eval-steps",
         type=int,
-        help="Shared training span and evaluation budget (default determined from the archive)",
+        help="Action budget for one evaluation (defaults to the official limit)",
+    )
+    pointmaze_budgets.add_argument(
+        "--eval-budgets",
+        type=int,
+        nargs="+",
+        help="Compare multiple action budgets with the same checkpoint and resets",
+    )
+    pointmaze.add_argument(
+        "--prediction-span",
+        type=int,
+        help="Maximum span for each model prediction (defaults to archive coverage)",
     )
     pointmaze.set_defaults(run=_pointmaze_latent, extra="pointmaze")
     first_targets = commands.add_parser(

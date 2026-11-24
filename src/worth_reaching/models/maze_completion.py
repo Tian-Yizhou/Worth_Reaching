@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import torch
@@ -38,6 +39,7 @@ class CompletionConfig:
     flow_updates: int = 700
     candidates: int = 4
     predictor_stopping: PredictorStopping = PredictorStopping()
+    max_action_budget: ClassVar[int | None] = None
 
     def __post_init__(self) -> None:
         if (
@@ -56,10 +58,19 @@ class CompletionConfig:
             )
             < 1
             or self.max_horizon <= self.queries
+            or (
+                self.max_action_budget is not None
+                and self.max_action_budget < self.max_horizon
+            )
         ):
             raise ValueError(
                 "Use positive completion dimensions and a horizon longer than the query count"
             )
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetedCompletionConfig(CompletionConfig):
+    max_action_budget: int | None = None
 
 
 class LatentTrajectory(nn.Module):
@@ -81,7 +92,7 @@ def public_features(
     context: CompletionContext,
     mean: np.ndarray,
     scale: np.ndarray,
-    max_horizon: int,
+    config: CompletionConfig,
 ) -> Tensor:
     observations = tensor((context.observations - mean) / scale)
     goal = tensor((context.goal - mean) / scale)
@@ -96,8 +107,9 @@ def public_features(
             codec.encode(goal),
             observations[:, -1, :2],
             goal[:, :2],
-            tensor(context.remaining[:, None]) / max_horizon,
-            tensor(context.offsets) / max_horizon,
+            tensor(context.remaining[:, None])
+            / (config.max_action_budget or config.max_horizon),
+            tensor(context.offsets) / config.max_horizon,
         ),
         dim=-1,
     )
@@ -154,7 +166,7 @@ class LearnedCompletion:
     @torch.no_grad()
     def forecast(self, context: CompletionContext) -> tuple[Tensor, Tensor]:
         features = public_features(
-            self.codec, context, self.mean, self.scale, self.config.max_horizon
+            self.codec, context, self.mean, self.scale, self.config
         )
         return features, self.predictor(features)
 
@@ -219,7 +231,8 @@ class LearnedCompletion:
             self.decode(samples)[..., :2] - replay_xy[:, None], axis=-1
         ).mean(axis=-1)
         start = batch.context.observations[:, -1, None, :2]
-        fraction = batch.context.offsets / batch.context.remaining[:, None]
+        span = np.minimum(batch.context.remaining, self.config.max_horizon)
+        fraction = batch.context.offsets / span[:, None]
         interpolated = start + fraction[..., None] * (
             batch.context.goal[:, None, :2] - start
         )
@@ -265,9 +278,9 @@ def fit(
         out=out / "codec",
         resume=stage_resume(resume, "codec"),
     )
-    features = public_features(codec, training.context, mean, scale, config.max_horizon)
+    features = public_features(codec, training.context, mean, scale, config)
     validation_features = public_features(
-        codec, validation.context, mean, scale, config.max_horizon
+        codec, validation.context, mean, scale, config
     )
     with torch.no_grad():
         encoded_targets = codec.encode(targets)

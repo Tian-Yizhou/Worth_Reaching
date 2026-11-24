@@ -6,6 +6,32 @@ from hashlib import sha256
 import pytest
 
 
+def test_pointmaze_conditions_on_budget_without_extending_queries():
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("torch")
+    from worth_reaching.evaluation.maze_planning import completion_context
+    from worth_reaching.models.codec import ObservationCodec
+    from worth_reaching.models.maze_completion import (
+        BudgetedCompletionConfig,
+        public_features,
+    )
+
+    config = BudgetedCompletionConfig(max_horizon=391, max_action_budget=600)
+    state, goal = np.zeros(4, dtype=np.float32), np.ones(4, dtype=np.float32)
+    history = [(state, np.zeros(2, dtype=np.float32))]
+    short, long = (
+        completion_context(history, goal, budget, config) for budget in (400, 600)
+    )
+    np.testing.assert_array_equal(short.offsets, long.offsets)
+    assert short.offsets[0, 0] == 43
+    assert (short.remaining[0], long.remaining[0]) == (400, 600)
+    codec = ObservationCodec(config.width, config.latent_size, state.size)
+    short_features = public_features(codec, short, state, goal, config)
+    long_features = public_features(codec, long, state, goal, config)
+    assert short_features[0, -9].item() == pytest.approx(400 / 600)
+    assert long_features[0, -9].item() == pytest.approx(1)
+
+
 @pytest.mark.parametrize(
     ("task", "environment", "action_limit"),
     [
@@ -41,9 +67,10 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
         evaluation.close()
         collector.close()
 
-    out = tmp_path / "run"
-    selection = ["--eval-steps", "18"] if task == "medium" else []
-    steps = 18
+    root = tmp_path / "run"
+    selection = ["--eval-budgets", "12", "30"] if task == "medium" else []
+    steps = 30 if selection else action_limit
+    span = 18
     subprocess.run(
         [
             "wr",
@@ -53,7 +80,7 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
             "--task",
             task,
             "--out",
-            out,
+            root,
             "--windows",
             "32",
             "--codec-updates",
@@ -70,27 +97,43 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
         capture_output=True,
         text=True,
     )
+    out = root / "budget-30" if selection else root
+    if selection:
+        sweep = json.loads((root / "summary.json").read_text())
+        assert set(sweep["budgets"]) == {"12", "30"}
+        assert sweep["evaluation_environment_steps"] == 4 * (12 + 30)
+        assert (root / "budget-12/weights.msgpack").samefile(root / "weights.msgpack")
+        assert (out / "weights.msgpack").samefile(root / "weights.msgpack")
+        with gzip.open(root / "budget-12/plans.jsonl.gz", "rt") as stream:
+            shorter = json.loads(next(stream))
+        assert shorter["remaining_budget"] == shorter["prediction_span"] == 12
     manifest = json.loads((out / "manifest.json").read_text())
     assert manifest["task"] == task
     assert manifest["dataset"] == dataset_id
     assert manifest["environment"] == environment
-    assert manifest["training"]["max_horizon"] == steps
+    assert manifest["training"]["max_horizon"] == span
+    assert manifest["training"]["max_action_budget"] == action_limit
     assert manifest["evaluation"]["action_limit"] == steps
-    assert manifest["window_sampling"]["span_source"] == (
-        "requested" if selection else "training_episode_p90"
-    )
+    assert manifest["window_sampling"]["span_source"] == "training_episode_p90"
     for name, minimum, episodes in (("train", 8, 5), ("validation", 128, 1)):
         coverage = manifest["window_sampling"][name]
-        assert coverage["max_span"] == steps
+        assert coverage["max_span"] == span
+        assert coverage["max_remaining_budget"] == action_limit
+        assert coverage["windows_with_budget_above_span"] > 0
         assert coverage["full_span_reset_windows"] >= minimum
         assert coverage["episodes_long_enough"] == episodes
-    split = json.loads((out / "split.json").read_text())
+    split = json.loads((root / "split.json").read_text())
     assert split == {
         "train_episodes": [0, 1, 2, 3, 4],
         "validation_episodes": [6],
         "gap_episode": 5,
     }
     episodes = json.loads((out / "episodes.json").read_text())
+    if selection:
+        short_episodes = json.loads((root / "budget-12/episodes.json").read_text())
+        assert [(row["start"], row["goal"]) for row in short_episodes["direct"]] == [
+            (row["start"], row["goal"]) for row in episodes["direct"]
+        ]
     with np.load(out / "trajectories.npz", allow_pickle=False) as paths:
         for direct, latent in zip(episodes["direct"], episodes["latent"], strict=True):
             assert (direct["seed"], direct["start"], direct["goal"]) == (
@@ -102,9 +145,11 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
             assert paths[f"latent_{latent['seed']}"].shape == (steps + 1, 4)
     with gzip.open(out / "plans.jsonl.gz", "rt") as stream:
         plan = json.loads(next(stream))
-        assert plan["prediction_span"] == steps
+        assert plan["remaining_budget"] == steps
+        assert plan["prediction_span"] == span
         assert all(
-            row["prediction_span"] == steps - row["step"]
+            row["remaining_budget"] == steps - row["step"]
+            and row["prediction_span"] == min(row["remaining_budget"], span)
             for row in map(json.loads, stream)
         )
     assert np.asarray(plan["latent_routes"]).shape == (4, 8, 16)
@@ -123,14 +168,14 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
                 data_dir,
                 "--out",
                 unsupported,
-                "--eval-steps",
+                "--prediction-span",
                 "19",
             ],
             capture_output=True,
             text=True,
         )
         assert rejected.returncode == 2
-        assert "The 19-step span is unsupported" in rejected.stderr
+        assert "The 19-step prediction span is unsupported" in rejected.stderr
         assert not unsupported.exists()
         probe = tmp_path / "first-targets"
         command = [
@@ -182,7 +227,7 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
         assert pair["replanning"]["steps"] == steps
         handoff = pair["handoff_step"]
         assert pair["plans"][0]["step"] == handoff == pair["direct"]["attempt_end_step"]
-        assert pair["plans"][0]["deadline"] == handoff + (steps - handoff) // 9
+        assert pair["plans"][0]["deadline"] == handoff + min(steps - handoff, span) // 9
         name = f"{pair['seed']}_7"
         with np.load(continuations / "trajectories.npz", allow_pickle=False) as paths:
             assert paths[f"{name}_prefix_actions"].shape == (handoff, 2)
@@ -228,7 +273,8 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
         )
         (declared,) = json.loads(bank_bytes)["7"]
         assert declared["seed"] == 69001
-        assert declared["prediction_span"] == steps
+        assert declared["prediction_span"] == span
+        assert declared["remaining_budget"] == steps
         assert declared["deadlines"] == [2, 4]
         assert declared["candidate_seed"] != declared["reference_seed"]
         assert (

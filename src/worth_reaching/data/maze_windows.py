@@ -46,6 +46,7 @@ class MazeTrajectories:
         queries: int,
         max_horizon: int,
         full_span_windows: int = 0,
+        max_action_budget: int | None = None,
     ) -> MaskedBatch:
         """Sample a public prefix, held-out middle and hindsight endpoint in one episode."""
         lengths = self.episode_lengths
@@ -62,7 +63,7 @@ class MazeTrajectories:
         start = np.where(rng.random(size) < 0.25, first, start)
         available = np.minimum(end - start, max_horizon)
         # Include long windows alongside random spans to exercise the full action budget.
-        remaining = np.where(
+        spans = np.where(
             rng.random(size) < 0.25, available, rng.integers(queries + 1, available + 1)
         ).astype(np.int32)
         if full_span_windows:
@@ -74,10 +75,20 @@ class MazeTrajectories:
             reset_episodes = rng.choice(supported, size=full_span_windows)
             start = np.concatenate((start, begins[reset_episodes]))
             first = np.concatenate((first, begins[reset_episodes]))
-            remaining = np.concatenate(
-                (remaining, np.full(full_span_windows, max_horizon, dtype=np.int32))
+            spans = np.concatenate(
+                (spans, np.full(full_span_windows, max_horizon, dtype=np.int32))
             )
-        offsets = query_offsets(remaining, queries)
+        budgets = spans.copy()
+        if max_action_budget is not None and max_action_budget > max_horizon:
+            full = np.flatnonzero(spans == max_horizon)
+            if len(full):
+                # A demonstrated endpoint may be reached before the deadline.
+                budgets[full] = rng.integers(
+                    max_horizon, max_action_budget + 1, len(full)
+                )
+                budgets[full[0]] = max_horizon
+                budgets[full[-1]] = max_action_budget
+        offsets = query_offsets(spans, queries)
         indexes = start[:, None] + np.arange(1 - history, 1)
         present = indexes >= first[:, None]
         history_rows = np.maximum(indexes, first[:, None])
@@ -88,8 +99,8 @@ class MazeTrajectories:
                 self.observations[history_rows],
                 np.where(has_incoming[..., None], self.actions[action_rows], 0),
                 present,
-                self.observations[start + remaining],
-                remaining,
+                self.observations[start + spans],
+                budgets,
                 offsets,
             ),
             self.observations[start[:, None] + offsets],

@@ -19,10 +19,15 @@ from worth_reaching.data.pointmaze import (
 from worth_reaching.envs.pointmaze import SEED_BASE, PointMaze
 from worth_reaching.envs.pointmaze_tasks import TASKS
 from worth_reaching.evaluation.maze_planning import Policy, RecedingGoals
-from worth_reaching.models.maze_completion import CompletionConfig, fit
+from worth_reaching.models.maze_completion import (
+    BudgetedCompletionConfig,
+    LearnedCompletion,
+    fit,
+)
 from worth_reaching.models.training import describe, stream_seed, validate_resume
 
 ALIGNED_SCHEMA = "pointmaze_latent_completion_v3"
+BUDGET_SCHEMA = "pointmaze_latent_completion_v4"
 
 
 def track(observation: np.ndarray, target: np.ndarray) -> np.ndarray:
@@ -64,11 +69,17 @@ def rollout(
 
 
 def _summarize(episodes: list[dict]) -> dict:
-    successes = sum(episode["success"] for episode in episodes)
+    arrival_steps = [
+        episode["first_success_step"] for episode in episodes if episode["success"]
+    ]
+    successes = len(arrival_steps)
     return {
         "episodes": len(episodes),
         "successes": successes,
         "success_rate": successes / len(episodes),
+        "mean_first_success_step": float(np.mean(arrival_steps))
+        if arrival_steps
+        else None,
         "mean_sparse_return": float(np.mean([e["sparse_return"] for e in episodes])),
         "mean_closest_distance": float(
             np.mean([e["closest_distance"] for e in episodes])
@@ -77,11 +88,14 @@ def _summarize(episodes: list[dict]) -> dict:
 
 
 def _window_coverage(batch: MaskedBatch, limit: int, supporting_episodes: int) -> dict:
-    spans, present = batch.context.remaining, batch.context.present
+    budgets, present = batch.context.remaining, batch.context.present
+    spans = np.minimum(budgets, limit)
     return {
         "windows": len(spans),
         "median_span": float(np.median(spans)),
         "max_span": int(spans.max()),
+        "max_remaining_budget": int(budgets.max()),
+        "windows_with_budget_above_span": int(np.count_nonzero(budgets > spans)),
         "full_span_reset_windows": int(
             np.count_nonzero((spans == limit) & (present.sum(axis=1) == 1))
         ),
@@ -89,23 +103,93 @@ def _window_coverage(batch: MaskedBatch, limit: int, supporting_episodes: int) -
     }
 
 
+def _evaluate_budget(
+    env: PointMaze,
+    out: Path,
+    model: LearnedCompletion,
+    limit: int,
+    seeds: list[int],
+    resets: dict[int, tuple[list, list]],
+) -> dict:
+    direct, latent, recorded = [], [], {}
+    with gzip.open(out / "plans.jsonl.gz", "wt", encoding="utf-8") as plans:
+        for seed in seeds:
+            control, control_path = rollout(env, seed, limit, track)
+            planner = RecedingGoals(
+                track,
+                model,
+                stream_seed(model.config.seed, seed),
+                limit,
+                action_size=ACTION_SIZE,
+            )
+            guided, guided_path = rollout(env, seed, limit, planner)
+            reset = (control["start"], control["goal"])
+            if reset != (guided["start"], guided["goal"]) or reset != resets.setdefault(
+                seed, reset
+            ):
+                raise ValueError(
+                    "PointMaze seeded reset failed to reproduce the public start and goal"
+                )
+            direct.append(control)
+            latent.append(guided)
+            recorded[f"direct_{seed}"] = control_path
+            recorded[f"latent_{seed}"] = guided_path
+            for plan in planner.plans:
+                remaining = limit - plan["step"]
+                plans.write(
+                    json.dumps(
+                        {
+                            "seed": seed,
+                            "remaining_budget": remaining,
+                            "prediction_span": min(remaining, model.config.max_horizon),
+                            **plan,
+                        },
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+
+    np.savez_compressed(out / "trajectories.npz", **recorded)
+    write_json(out / "episodes.json", {"direct": direct, "latent": latent})
+    return {
+        "action_limit": limit,
+        "direct": _summarize(direct),
+        "latent": _summarize(latent),
+        "only_direct": sum(
+            a["success"] and not b["success"]
+            for a, b in zip(direct, latent, strict=True)
+        ),
+        "only_latent": sum(
+            b["success"] and not a["success"]
+            for a, b in zip(direct, latent, strict=True)
+        ),
+        "training_environment_steps": 0,
+        "evaluation_environment_steps": sum(row["steps"] for row in (*direct, *latent)),
+    }
+
+
 def run(
     data_dir: Path,
     out: Path,
-    config: CompletionConfig,
+    config: BudgetedCompletionConfig,
     *,
     task_name: str,
     split: str,
     repeats: int,
-    limit: int | None,
+    budgets: list[int] | None,
+    prediction_span: int | None,
     resume: Path | None = None,
 ) -> dict:
     task = TASKS[task_name]
-    if (limit is not None and not config.queries < limit <= task.action_limit) or not (
-        0 < repeats <= SEED_BASE["test"] - SEED_BASE["dev"]
+    budgets = [task.action_limit] if budgets is None else sorted(budgets)
+    if (
+        not budgets
+        or len(set(budgets)) != len(budgets)
+        or not all(config.queries < limit <= task.action_limit for limit in budgets)
+        or not 0 < repeats <= SEED_BASE["test"] - SEED_BASE["dev"]
     ):
         raise ValueError(
-            f"Choose an action budget in {config.queries + 1}..{task.action_limit} "
+            f"Choose distinct action budgets in {config.queries + 1}..{task.action_limit} "
             "and disjoint reset seeds"
         )
     dataset, file_hashes = load_dataset(data_dir, task.dataset_id)
@@ -119,23 +203,36 @@ def run(
         raise ValueError(
             "PointMaze training episodes are too short for the completion queries"
         )
-    horizon_source = "requested" if limit is not None else "training_episode_p90"
-    if limit is None:
-        limit = min(
+    horizon_source = (
+        "requested" if prediction_span is not None else "training_episode_p90"
+    )
+    if prediction_span is None:
+        prediction_span = min(
             task.action_limit,
             int(np.quantile(eligible, 0.9, method="lower")),
             int(validation_lengths.max()),
         )
-    train_support = int(np.count_nonzero(train_lengths >= limit))
-    validation_support = int(np.count_nonzero(validation_lengths >= limit))
-    if limit <= config.queries or not train_support or not validation_support:
+    train_support = int(np.count_nonzero(train_lengths >= prediction_span))
+    validation_support = int(np.count_nonzero(validation_lengths >= prediction_span))
+    if (
+        not config.queries < prediction_span <= task.action_limit
+        or not train_support
+        or not validation_support
+    ):
         raise ValueError(
-            f"The {limit}-step span is unsupported by the PointMaze archive "
+            f"The {prediction_span}-step prediction span is unsupported by the PointMaze protocol "
             f"(longest train/validation episodes: {train_lengths.max()}/{validation_lengths.max()}); "
-            "choose a covered --eval-steps value or supply longer trajectories"
+            "choose a covered --prediction-span value within the official limit or supply longer trajectories"
         )
-    config = replace(config, max_horizon=limit)
-    settings = dict(history=config.history, queries=config.queries, max_horizon=limit)
+    config = replace(
+        config, max_horizon=prediction_span, max_action_budget=task.action_limit
+    )
+    settings = dict(
+        history=config.history,
+        queries=config.queries,
+        max_horizon=prediction_span,
+        max_action_budget=task.action_limit,
+    )
     training = train.sample_windows(
         np.random.default_rng([config.seed, 800]),
         config.windows,
@@ -153,32 +250,39 @@ def run(
     try:
         env = PointMaze(native, task)
         out.mkdir(parents=True, exist_ok=False)
-        write_json(
-            out / "manifest.json",
-            {
-                "schema": ALIGNED_SCHEMA,
-                "task": task_name,
-                "environment": native.spec.id,
-                "versions": {
-                    name: version(name)
-                    for name in ("minari", "gymnasium-robotics", "gymnasium", "mujoco")
-                },
-                "dataset": task.dataset_id,
-                "dataset_files_sha256": file_hashes,
-                "training": asdict(config),
-                "window_sampling": {
-                    "span_source": horizon_source,
-                    "train": _window_coverage(training, limit, train_support),
-                    "validation": _window_coverage(
-                        validation_windows, limit, validation_support
-                    ),
-                },
-                "evaluation": {"split": split, "seeds": seeds, "action_limit": limit},
-                "selection": "first sampled route, earliest queried state",
-                "compute": describe(),
-                "code_revision": code_revision(),
+        evaluation = {"split": split, "seeds": seeds}
+        multiple = len(budgets) > 1
+        manifest = {
+            "schema": BUDGET_SCHEMA,
+            "task": task_name,
+            "environment": native.spec.id,
+            "versions": {
+                name: version(name)
+                for name in ("minari", "gymnasium-robotics", "gymnasium", "mujoco")
             },
-        )
+            "dataset": task.dataset_id,
+            "dataset_files_sha256": file_hashes,
+            "training": asdict(config),
+            "window_sampling": {
+                "span_source": horizon_source,
+                "train": _window_coverage(training, prediction_span, train_support),
+                "validation": _window_coverage(
+                    validation_windows, prediction_span, validation_support
+                ),
+            },
+            "evaluation": {
+                **evaluation,
+                **(
+                    {"action_budgets": budgets}
+                    if multiple
+                    else {"action_limit": budgets[0]}
+                ),
+            },
+            "selection": "first sampled route, earliest queried state",
+            "compute": describe(),
+            "code_revision": code_revision(),
+        }
+        write_json(out / "manifest.json", manifest)
         write_json(out / "split.json", episode_split)
         mean = train.observations.mean(axis=0)
         scale = np.maximum(train.observations.std(axis=0), 1e-3)
@@ -204,61 +308,33 @@ def run(
             )
         )
 
-        direct, latent = [], []
-        recorded = {}
-        with gzip.open(out / "plans.jsonl.gz", "wt", encoding="utf-8") as plans:
-            for seed in seeds:
-                control, control_path = rollout(env, seed, limit, track)
-                planner = RecedingGoals(
-                    track,
-                    model,
-                    stream_seed(config.seed, seed),
-                    limit,
-                    action_size=ACTION_SIZE,
+        by_budget, resets = {}, {}
+        for limit in budgets:
+            arm = out / f"budget-{limit}" if multiple else out
+            if multiple:
+                arm.mkdir()
+                (arm / "weights.msgpack").hardlink_to(out / "weights.msgpack")
+                write_json(
+                    arm / "manifest.json",
+                    {**manifest, "evaluation": {**evaluation, "action_limit": limit}},
                 )
-                guided, guided_path = rollout(env, seed, limit, planner)
-                if (control["start"], control["goal"]) != (
-                    guided["start"],
-                    guided["goal"],
-                ):
-                    raise ValueError(
-                        "PointMaze seeded reset failed to reproduce the public start and goal"
-                    )
-                direct.append(control)
-                latent.append(guided)
-                recorded[f"direct_{seed}"] = control_path
-                recorded[f"latent_{seed}"] = guided_path
-                for plan in planner.plans:
-                    plans.write(
-                        json.dumps(
-                            {
-                                "seed": seed,
-                                "prediction_span": limit - plan["step"],
-                                **plan,
-                            },
-                            separators=(",", ":"),
-                        )
-                        + "\n"
-                    )
+            result = _evaluate_budget(env, arm, model, limit, seeds, resets)
+            by_budget[limit] = result
+            if multiple:
+                write_json(arm / "summary.json", result)
     finally:
         native.close()
 
-    np.savez_compressed(out / "trajectories.npz", **recorded)
-    write_json(out / "episodes.json", {"direct": direct, "latent": latent})
-    summary = {
-        "validation": metrics,
-        "direct": _summarize(direct),
-        "latent": _summarize(latent),
-        "only_direct": sum(
-            a["success"] and not b["success"]
-            for a, b in zip(direct, latent, strict=True)
-        ),
-        "only_latent": sum(
-            b["success"] and not a["success"]
-            for a, b in zip(direct, latent, strict=True)
-        ),
-        "training_environment_steps": 0,
-        "evaluation_environment_steps": sum(row["steps"] for row in (*direct, *latent)),
-    }
+    if multiple:
+        summary = {
+            "validation": metrics,
+            "budgets": by_budget,
+            "training_environment_steps": 0,
+            "evaluation_environment_steps": sum(
+                row["evaluation_environment_steps"] for row in by_budget.values()
+            ),
+        }
+    else:
+        summary = {"validation": metrics, **by_budget[budgets[0]]}
     write_json(out / "summary.json", summary)
     return summary

@@ -26,14 +26,19 @@ def completion_context(
         np.stack, zip(*history, strict=True)
     )
     present = (np.arange(config.history) >= config.history - count)[None]
-    duration = np.array([remaining], dtype=np.int32)
+    span = np.array([min(remaining, config.max_horizon)], dtype=np.int32)
+    budget = (
+        np.array([remaining], dtype=np.int32)
+        if config.max_action_budget is not None
+        else span
+    )
     return CompletionContext(
         observations,
         actions,
         present,
         goal[None],
-        duration,
-        query_offsets(duration, config.queries),
+        budget,
+        query_offsets(span, config.queries),
     )
 
 
@@ -79,7 +84,7 @@ class RecedingGoals:
 
     def _plan(self, goal: np.ndarray) -> np.ndarray:
         config = self.completion.config
-        remaining = min(self.limit - self.step, config.max_horizon)
+        remaining = self.limit - self.step
         if remaining <= config.queries:
             self.deadline = self.limit
             return goal
