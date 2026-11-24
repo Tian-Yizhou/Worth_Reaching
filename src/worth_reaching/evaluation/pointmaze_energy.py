@@ -13,7 +13,12 @@ from worth_reaching.data.pointmaze import ACTION_SIZE, load_dataset
 from worth_reaching.envs.pointmaze import SEED_BASE, PointMaze
 from worth_reaching.envs.pointmaze_tasks import TASKS
 from worth_reaching.evaluation.maze_planning import completion_context
-from worth_reaching.evaluation.pointmaze import ALIGNED_SCHEMA, rollout, track
+from worth_reaching.evaluation.pointmaze import (
+    ALIGNED_SCHEMA,
+    BUDGET_SCHEMA,
+    rollout,
+    track,
+)
 from worth_reaching.evaluation.pointmaze_probe import FrozenRun
 from worth_reaching.models.latent_energy import prefix_energy
 from worth_reaching.models.training import stream_seed
@@ -55,7 +60,8 @@ def _declare(
         "seed": seed,
         "start": observation.tolist(),
         "goal": goal.tolist(),
-        "prediction_span": limit,
+        "prediction_span": min(limit, model.config.max_horizon),
+        "remaining_budget": limit,
         "deadlines": context.offsets[0, :prefix_length].tolist(),
         "candidate_seed": candidate_seed,
         "reference_seed": reference_seed,
@@ -205,24 +211,26 @@ def run(
     runs = [FrozenRun.load(path) for path in run_paths]
     base = runs[0].manifest
     limit = base["evaluation"]["action_limit"]
-    queries = runs[0].model.config.queries
+    config = runs[0].model.config
     if len({frozen.model.config.seed for frozen in runs}) != len(runs):
         raise ValueError("Supply distinct training seeds")
-    if not 1 <= prefix_length <= queries:
+    if not 1 <= prefix_length <= config.queries:
         raise ValueError("The prefix must fit within the frozen model's query schedule")
     for frozen in runs:
         if (
-            frozen.manifest["schema"] != ALIGNED_SCHEMA
+            frozen.manifest["schema"] != base["schema"]
+            or frozen.manifest["schema"] not in {ALIGNED_SCHEMA, BUDGET_SCHEMA}
             or frozen.manifest["evaluation"]["action_limit"] != limit
-            or frozen.model.config.max_horizon != limit
-            or frozen.model.config.queries != queries
+            or frozen.model.config.max_action_budget != config.max_action_budget
+            or frozen.model.config.max_horizon != config.max_horizon
+            or frozen.model.config.queries != config.queries
             or any(
                 frozen.manifest[key] != base[key]
                 for key in ("task", "dataset_files_sha256", "versions")
             )
         ):
             raise ValueError(
-                "Use span-aligned PointMaze runs with matched tasks, budgets, archives, versions and query schedules"
+                "Use PointMaze runs with matched training protocols, budgets, archives, versions and query schedules"
             )
     task = TASKS[base["task"]]
     dataset, hashes = load_dataset(data_dir, task.dataset_id)

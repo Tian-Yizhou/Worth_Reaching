@@ -18,8 +18,17 @@ from worth_reaching.data.pointmaze import ACTION_SIZE, load_dataset
 from worth_reaching.envs.pointmaze import PointMaze
 from worth_reaching.envs.pointmaze_tasks import TASKS
 from worth_reaching.evaluation.maze_planning import RecedingGoals, completion_context
-from worth_reaching.evaluation.pointmaze import ALIGNED_SCHEMA, rollout, track
-from worth_reaching.models.maze_completion import CompletionConfig, LearnedCompletion
+from worth_reaching.evaluation.pointmaze import (
+    ALIGNED_SCHEMA,
+    BUDGET_SCHEMA,
+    rollout,
+    track,
+)
+from worth_reaching.models.maze_completion import (
+    BudgetedCompletionConfig,
+    CompletionConfig,
+    LearnedCompletion,
+)
 from worth_reaching.models.training import PredictorStopping, stream_seed
 
 
@@ -37,14 +46,22 @@ class FrozenRun:
         if manifest.get("schema") not in {
             "pointmaze_latent_completion_v2",
             ALIGNED_SCHEMA,
+            BUDGET_SCHEMA,
         }:
             raise ValueError(f"Expected a saved PyTorch PointMaze run in {directory}")
+        if "action_limit" not in manifest["evaluation"]:
+            raise ValueError(f"Choose a budget-<steps> subdirectory within {directory}")
         settings = dict(manifest["training"])
         if "predictor_stopping" in settings:
             settings["predictor_stopping"] = PredictorStopping(
                 **settings["predictor_stopping"]
             )
-        config = CompletionConfig(**settings)
+        config_type = (
+            BudgetedCompletionConfig
+            if manifest["schema"] == BUDGET_SCHEMA
+            else CompletionConfig
+        )
+        config = config_type(**settings)
         raw = (directory / "weights.msgpack").read_bytes()
         model = LearnedCompletion.from_weights(
             config, serialization.msgpack_restore(raw)
@@ -312,6 +329,7 @@ def run(
         any(
             item.model.config.queries != config.queries
             or item.model.config.max_horizon != config.max_horizon
+            or item.model.config.max_action_budget != config.max_action_budget
             for item in runs
         )
         or min(limit, config.max_horizon) <= config.queries
@@ -401,7 +419,7 @@ def run(
                 context = completion_context(
                     [(start, np.zeros(ACTION_SIZE, dtype=np.float32))],
                     goal,
-                    min(limit, config.max_horizon),
+                    limit,
                     model.config,
                 )
                 key = stream_seed(model.config.seed, seed)

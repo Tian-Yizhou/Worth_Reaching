@@ -235,15 +235,27 @@ done
 
 Include `--extra pointmaze` alongside any installed extras you want to keep. Each Minari archive contains a continuing collection. The loader uses the first 80% of episodes by ID for fitting, skips the boundary episode and holds out the suffix for offline reconstruction and prediction diagnostics. The evaluator uses paired seeded resets on the fixed-goal, continuing task and a shared position and velocity controller.
 
-The training span and the evaluation action budget are set together. By default, the span is the 90th percentile of training episode lengths eligible for masking, capped by the official action limit and the longest validation episode. Set `--eval-steps` explicitly to fix a budget across archives. A requested span must be supported by both training and validation episodes. A quarter of each sample set is reserved for exact full-span windows beginning at the first observation of a sufficiently long episode. The remaining windows cover varying spans and histories. The manifest records the chosen span, source episode counts, and realized window coverage.
+Evaluation defaults to the task's official action limit. `--eval-steps` sets a single action budget within that limit. `--eval-budgets` evaluates one trained model on several budgets with the same seeded starts and terminal goals. Each budget gets its own rollout with that budget supplied to the planner. Terminal success counts a native success event at any step through the budget, including on the last action. Each episode records the first success step.
 
-Direct execution tracks the terminal goal. Latent execution follows the earliest decoded state of the first sampled route and replans when the queried time offset elapses. Terminal success counts native success events through the chosen budget. Sparse return is summed across that same budget. Use `--eval-split test` after fixing the recipe. Archived `v2` runs can still be probed at their recorded budgets, including evaluation spans beyond their training coverage. The aligned pilot budgets should be stated when comparing scores.
+The model's maximum prediction span defaults to the 90th percentile of training episode lengths eligible for masking, capped by the official limit and the longest validation episode. Use `--prediction-span` to specify a span covered by both training and validation. A quarter of each sample set starts at the first observation of a trajectory and covers that full span. Full-span training windows can carry different remaining action budgets up to the official limit while keeping their observed endpoints and queries fixed. This supplies examples of reaching an endpoint within a larger budget. At deployment the model receives the actual remaining action budget, and its query offsets are computed over the smaller of the remaining budget and the configured prediction span. The manifest records both training and evaluation coverage.
+
+Direct execution tracks the terminal goal. Latent execution follows the earliest decoded state of the first sampled route and replans when the queried time offset elapses. Sparse return is summed across the action budget. Use `--eval-split test` after fixing the recipe. Archived `v2` and `v3` runs can still be probed under their recorded protocols. State the evaluation budget and prediction span when comparing scores.
 
 The run stores the data hashes and versions in `manifest.json`, archive episode IDs in `split.json`, sampled latent and decoded routes in `plans.jsonl.gz`, executed public states in `trajectories.npz`, and scores in `episodes.json` and `summary.json`.
 
+#### Sweep the action budget in Maze2D Medium
+
+```bash
+run_dir="$(mktemp -d results/pointmaze-budgets.XXXXXX)"
+uv run --no-sync wr pointmaze-latent --task medium --eval-split test \
+  --eval-budgets 300 400 500 600 --out "$run_dir/medium"
+```
+
+The sweep writes one set of trained weights and a `summary.json` with results by budget. Each `budget-<steps>/` contains its own manifest, terminal outcomes, trajectories, and plans. Each plan records both `remaining_budget` and `prediction_span`. Pass a budget subdirectory to the frozen checkpoint probes for that budget.
+
 ### Diagnose frozen Maze2D first targets
 
-Use completed runs with the same task, prediction span, reset bank, environment versions, and dataset. The probe restores the predictor, codec, and flow from the saved weights and uses the original first query time and sampling seed. Here is a two-seed Medium run with the archive-derived budget.
+Use completed runs with the same task, action budget, prediction span, reset bank, environment versions, and dataset. The probe restores the predictor, codec, and flow from the saved weights and uses the original first query time and sampling seed. Here is a two-seed Medium run with the official evaluation budget and an archive-derived prediction span.
 
 ```bash
 run_dir="$(mktemp -d results/pointmaze-horizon-aligned.XXXXXX)"
@@ -273,7 +285,7 @@ The summary reports paired terminal wins, losses, and results after arrival and 
 
 ### Test latent energy against terminal success
 
-Use the span-aligned checkpoints from the two-seed Medium run above. Each start supplies a public reset observation, terminal goal, and remaining budget. The frozen world model and its completion flow draw candidates and an independent reference sample. Both draws are truncated to the prefix that will be attempted. The score is the negative log Gaussian-smoothed marginal density of that prefix under the flow draws, divided by the number of latent coordinates and reported up to a fixed additive constant. Smoothing uses the frozen residual normalization and Scott's bandwidth in those coordinates. The predictor's squared latent error is recorded as a separate ranking on the same candidates. This setup compares rankings without fitting either score to execution outcomes.
+Use the checkpoints from the two-seed Medium run above, or select a budget subdirectory from each checkpoint's sweep. Each start supplies a public reset observation, terminal goal, and remaining budget. The frozen world model and its completion flow draw candidates and an independent reference sample. Both draws are truncated to the prefix that will be attempted. The score is the negative log Gaussian-smoothed marginal density of that prefix under the flow draws, divided by the number of latent coordinates and reported up to a fixed additive constant. Smoothing uses the frozen residual normalization and Scott's bandwidth in those coordinates. The predictor's squared latent error is recorded as a separate ranking on the same candidates. This setup compares rankings without fitting either score to execution outcomes.
 
 ```bash
 uv run --no-sync wr pointmaze-latent-energy --runs "$run_dir"/medium-{7,19} \
