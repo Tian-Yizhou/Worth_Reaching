@@ -1,5 +1,6 @@
 import json
 import subprocess
+from hashlib import sha256
 
 from worth_reaching.tasks.dependency_grid import environment as grid
 from worth_reaching.tasks.dependency_grid.experiment import BUDGET, DEADLINES, attempt
@@ -76,3 +77,72 @@ def test_dependency_grid_continues_after_timeout_and_splits_by_layout():
     assert trial.attempt_steps == deadline
     splits = [{layout.id for layout in grid.layouts(split)} for split in grid.SPLITS]
     assert sum(map(len, splits)) == len(set.union(*splits)) == 64
+
+
+def test_dependency_grid_latent_cli_uses_public_windows_and_frozen_choices(tmp_path):
+    out = tmp_path / "latent"
+    subprocess.run(
+        [
+            "wr",
+            "dependency-grid-latent",
+            "--out",
+            str(out),
+            "--layouts",
+            "1",
+            "--demonstrations",
+            "1",
+            "--encoder-updates",
+            "2",
+            "--updates",
+            "2",
+            "--flow-updates",
+            "2",
+            "--repeats",
+            "2",
+            "--candidates",
+            "2",
+            "--density-samples",
+            "4",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    manifest = json.loads((out / "manifest.json").read_text())
+    train, dev = (set(manifest["layouts"][split]) for split in ("train", "dev"))
+    assert train.isdisjoint(dev)
+    assert set(manifest["layouts"]["evaluation"]) <= dev
+    assert manifest["query_steps"] == [4, 8]
+    assert manifest["collection_seed"] == 7
+    bank_path = out / "candidate-bank.json"
+    assert (
+        manifest["candidate_bank_sha256"] == sha256(bank_path.read_bytes()).hexdigest()
+    )
+    bank = json.loads(bank_path.read_text())
+    traces = [
+        json.loads(line)
+        for line in (out / "trajectories.jsonl").read_text().splitlines()
+    ]
+    train_episodes = {row["episode_id"] for row in traces if row["split"] == "train"}
+    for row in traces:
+        assert len(row["observations"]) == len(row["actions"]) + 1
+        assert "slips" not in row
+    evaluated = [
+        json.loads(line) for line in (out / "attempts.jsonl").read_text().splitlines()
+    ]
+    for declaration, result in zip(bank, evaluated, strict=True):
+        assert declaration["layout_id"] == result["layout_id"]
+        assert "outcomes" not in declaration and "slips" not in declaration
+        assert len(declaration["flow"]) == len(declaration["replay"]) == 2
+        assert {row["episode_id"] for row in declaration["replay"]} <= train_episodes
+        assert declaration["choices"]["lowest_energy"] == min(
+            range(2), key=lambda i: declaration["flow"][i]["energy"]
+        )
+        best = result["reference_choices"]["flow"]
+        assert best["index"] == max(
+            range(2), key=best["reference_successes"].__getitem__
+        )
+        picked = result["outcomes"]["flow"][declaration["choices"]["lowest_energy"]]
+        assert (
+            result["arms"]["lowest_energy"]["success"]
+            == sum(trial["success"] for trial in picked) / 2
+        )

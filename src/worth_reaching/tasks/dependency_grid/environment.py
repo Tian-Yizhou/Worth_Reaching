@@ -54,14 +54,16 @@ class Layout:
         if action == WAIT:
             return position
         dy, dx = MOVES[action]
-        row, column = position[0] + dy, position[1] + dx
+        destination = position[0] + dy, position[1] + dx
+        return destination if self.is_free(destination) else position
+
+    def is_free(self, position: Position) -> bool:
+        row, column = position
         if not (0 <= row < SIZE and 0 <= column < SIZE):
-            return position
+            return False
         if row in (2, 4) and all(column != lane.column for lane in self.lanes):
-            return position
-        if row > 2 and column == START[1]:
-            return position
-        return row, column
+            return False
+        return row <= 2 or column != START[1]
 
 
 @dataclass(frozen=True, slots=True)

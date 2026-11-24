@@ -9,6 +9,7 @@ Each row lists the experiment extra to pass to `uv sync --locked`. For model tra
 | Workflow | Experiment extra | Inputs and next step |
 | --- | --- | --- |
 | [Dependency grid](#compare-ordered-targets-in-the-dependency-grid) | Base install | Run matched target attempts at two depths with no dataset or checkpoint. |
+| [Dependency-grid latent goals](#test-frozen-latent-goals-in-the-dependency-grid) | `craftax` (Flax serialization) | Collect public trajectories, train a completion model, and compare frozen selection and replay. |
 | [Grid prediction](#train-and-test-latent-trajectory-completion) | `craftax` (Flax serialization) | Generate demonstrations with `train-completion --grid`, use its checkpoint with [grid-routes](#sample-and-execute-alternative-routes), then pass both runs to [grid-feedback](#train-from-execution-feedback). |
 | [Craftax collection](#collect-craftax-trajectories) | `craftax` | Collect worlds with a random policy or the expert checkpoint. [Export windows](#prepare-masked-trajectory-windows) from successful demonstrations and pass them to `train-completion --windows`. |
 | [PointMaze](#run-the-diffuser-maze2d-pilots) | `pointmaze` | Download the corresponding Minari dataset. Train with `pointmaze-latent`, then reuse frozen Medium runs for the [energy comparison](#test-latent-energy-against-terminal-success). |
@@ -46,9 +47,30 @@ Each layout supplies a shared start and two terminal destinations at both depths
 
 Per goal, the diagnostic runs direct tracking, each lane's individual entry and inner targets, and both orders of each pair. The total allowance is 20 actions. The first and second target deadlines are at actions 7 and 14. When the attempt ends, the same local controller continues toward the terminal goal with the remaining budget. The same per-step slip draws apply to every branch, both goals, and both depths at a given layout and repeat.
 
-`manifest.json` records the layout IDs, settings, and controller. `decisions.jsonl` records the declared targets, matched draws, and outcomes. `summary.json` reports terminal success and the difference from direct tracking by depth and goal, arrivals, successes after misses, and strict ranking reversals when the goal switches. At depth one, the reversal compares the two entry targets. At depth two, it compares the two entry-then-inner sequences. The diagnostic's targets are predeclared key cells. Learning and selecting latent targets is the next milestone. [Research plan](latent-subgoal-research.md)
+`manifest.json` records the layout IDs, settings, and controller. `decisions.jsonl` records the declared targets, matched draws, and outcomes. `summary.json` reports terminal success and the difference from direct tracking by depth and goal, arrivals, successes after misses, and strict ranking reversals when the goal switches. At depth one, the reversal compares the two entry targets. At depth two, it compares the two entry-then-inner sequences. The diagnostic's targets are predeclared key cells. [Learned target comparison](#test-frozen-latent-goals-in-the-dependency-grid) · [Research plan](latent-subgoal-research.md)
 
 Development uses 16 layouts and 16 repeats by default. To shorten a smoke check, append `--layouts 1 --repeats 2`. Use the disjoint `--split test` layouts after fixing the protocol.
+
+## Test frozen latent goals in the dependency grid
+
+Install the training and serialization extras. The command generates its own trajectories and writes them alongside the paired attempts.
+
+```bash
+uv sync --locked --extra training-cpu --extra craftax
+mkdir -p results
+run_dir="$(mktemp -d results/dependency-grid-latent.XXXXXX)"
+uv run --no-sync wr dependency-grid-latent --seed 7 --out "$run_dir/seed-7"
+```
+
+The collector uses terminal-directed shortest-action search with sampled tie-breaking and action slips. It saves complete public observations and intended actions for every episode. Successful train trajectories supply the reconstruction encoder, masked predictor and residual flow. Success on the disjoint development trajectories filters validation windows, which are used for predictor stopping. The model observes position, the public key locations, acquired-key flags, depth, the terminal goal and the remaining budget.
+
+The model forecasts at actions 4 and 8. At depth one the evaluator attempts the first decoded cell, and at depth two it attempts both in order. The first invalid, repeated, start or terminal cell ends the proposed prefix. An empty prefix invokes direct tracking. A nonempty prefix uses the same geometric controller, absolute deadlines at actions 7 and 14, and 20-action budget as the dependency-grid diagnostic. Nearest-layout replay proposes the cells observed at the same query offsets from successful training episodes with the same depth and terminal goal. Each replay candidate comes from a distinct training layout.
+
+`candidate-bank.json` is saved before evaluation. It records the decoded proposals and frozen choices by minimum and maximum conditional flow energy, minimum latent forecast error, and minimum Manhattan distance among the longest valid prefixes. Both model-based scores use the requested latent slots before rounding and truncation. `attempts.jsonl` records matched outcomes for every candidate, the goal-conditioned and goal-blind forecasts, and timed targets that a terminal-directed demonstration achieved on the evaluation layout. The achieved-target replay is an evaluator diagnostic. The best-candidate references for flow and training-layout replay are selected on their own independent repeats and scored on the common evaluation repeats. The uniform rules report the mean over their full candidate banks. The nearest-replay rule selects the first candidate in the distance-ranked replay bank before seeing outcomes.
+
+`summary.json` reports terminal success, arrival, success after a missed target, and candidate prefix lengths. The arrival rate is the fraction of all attempts that reached the full nonempty prefix. Paired intervals resample layouts and keep both goal cases together. The run counts train and development collection, achieved-target collection, reference selection, and evaluation steps separately. [Research plan](latent-subgoal-research.md#2-separate-discovery-selection-and-execution)
+
+Use `--seed` to vary training while keeping the demonstrations, evaluation starts, and repeat streams fixed. Use `--collection-seed` to generate a different demonstration archive deliberately. For a smoke check, append `--layouts 1 --repeats 2 --candidates 2 --density-samples 4 --demonstrations 1 --encoder-updates 2 --updates 2 --flow-updates 2`. After settling the protocol on development layouts, pass `--split test` to evaluate the disjoint layouts with the same train and development split.
 
 ## Check a development installation
 
@@ -73,6 +95,7 @@ Artifacts stay in `results/` on the server. Git and the Mac sync scripts exclude
 | `results/grid-routes.*/` | Latent flow checkpoints and matched attempt records |
 | `results/grid-feedback.*/` | Training attempts, target masks, updated flows and held-out feedback comparisons |
 | `results/dependency-grid.*/` | Layouts, matched target attempts and terminal success by goal and depth |
+| `results/dependency-grid-latent.*/` | Public trajectories, frozen weights, candidate declarations, and matched terminal outcomes |
 | `results/antmaze-gcbc.*/` | GCBC checkpoints, matched reset banks and per-task rollout outcomes |
 | `results/antmaze-latent.*/` | Completion weights, sampled and decoded plans, and paired terminal outcomes |
 | `results/antmaze-waypoints.*/` | Paired direct and oracle waypoint execution outcomes |
