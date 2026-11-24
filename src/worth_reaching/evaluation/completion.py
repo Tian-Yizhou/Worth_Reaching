@@ -12,7 +12,6 @@ from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.data.completion import CompletionExample, load_completion_corpus
-from worth_reaching.envs import grid_routes
 from worth_reaching.models.completion import (
     CHECKPOINT_SCHEMA,
     LatentPredictor,
@@ -24,6 +23,7 @@ from worth_reaching.models.completion import (
     predict,
 )
 from worth_reaching.models.training import describe, tensor, validate_resume, weights
+from worth_reaching.tasks.grid_routes import environment as grid_routes
 
 
 def score_paired_routes(
@@ -161,7 +161,7 @@ def run_completion_training(
             "group_by": "passages_and_goal_locations",
         }
     else:
-        from worth_reaching.envs.craftax import ACTION_NAMES
+        from worth_reaching.tasks.craftax.environment import ACTION_NAMES
 
         if evaluate_test:
             raise ValueError("--evaluate-test is available for the grid diagnostic")

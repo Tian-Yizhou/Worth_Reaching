@@ -8,7 +8,11 @@ import numpy as np
 from numpy.typing import NDArray
 
 from worth_reaching.data.craftax_trajectories import EpisodeSpec, episode_keys
-from worth_reaching.envs.craftax import CraftaxClassic, CraftaxEpisode, Outcome
+from worth_reaching.tasks.craftax.environment import (
+    CraftaxClassic,
+    CraftaxEpisode,
+    Outcome,
+)
 
 
 class Continuation(Protocol):

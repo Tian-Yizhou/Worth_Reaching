@@ -12,7 +12,7 @@ import orbax.checkpoint as ocp
 from flax import linen as nn
 from numpy.typing import NDArray
 
-from worth_reaching.envs.craftax import ACTION_NAMES
+from worth_reaching.tasks.craftax.environment import ACTION_NAMES
 
 
 class CraftaxExpert:

@@ -13,19 +13,19 @@ from flax import serialization
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.data.kuka import STATE_SIZE, load_clips, sample_windows, stack_goal
 from worth_reaching.data.trajectory_windows import CompletionContext, query_offsets
-from worth_reaching.envs.kuka import (
-    ACTION_LIMIT,
-    BLOCK_HEIGHT,
-    REVISION,
-    SEED_BASE,
-    KukaStacking,
-)
 from worth_reaching.models.continuous_completion import (
     CompletionConfig,
     LearnedCompletion,
     fit,
 )
 from worth_reaching.models.training import describe, stream_seed, validate_resume
+from worth_reaching.tasks.kuka.environment import (
+    ACTION_LIMIT,
+    BLOCK_HEIGHT,
+    REVISION,
+    SEED_BASE,
+    KukaStacking,
+)
 
 
 def _context(

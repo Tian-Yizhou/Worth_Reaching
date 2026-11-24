@@ -12,14 +12,7 @@ import numpy as np
 import torch
 from flax import serialization
 
-from worth_reaching.data.antmaze import (
-    ACTION_SIZE,
-    DATASET_URL,
-    DATASETS,
-    load_antmaze_archive,
-)
 from worth_reaching.data.artifacts import code_revision, write_json
-from worth_reaching.envs import antmaze
 from worth_reaching.models import gcbc
 from worth_reaching.models.training import (
     describe,
@@ -27,6 +20,15 @@ from worth_reaching.models.training import (
     resume_checkpoint,
     train_stage,
     weights,
+)
+from worth_reaching.tasks.antmaze import environment as antmaze
+from worth_reaching.tasks.antmaze.checkpoint import CHECKPOINT_SCHEMA, LEGACY_SCHEMA
+from worth_reaching.tasks.antmaze.dataset import (
+    ACTION_SIZE,
+    DATASET_URL,
+    DATASETS,
+    OBSERVATION_SIZE,
+    load_antmaze_archive,
 )
 
 Policy = Callable[[np.ndarray, np.ndarray], np.ndarray]
@@ -219,13 +221,13 @@ def run(
     if archive.fingerprint == validation.fingerprint:
         raise ValueError("Training and validation must use distinct archives")
     torch.manual_seed(train.seed)
-    model = gcbc.GCBC(train.width)
+    model = gcbc.GCBC(train.width, OBSERVATION_SIZE, ACTION_SIZE)
     mean = archive.observations.mean(axis=0, dtype=np.float64).astype(np.float32)
     scale = np.maximum(archive.observations.std(axis=0, dtype=np.float64), 1e-3).astype(
         np.float32
     )
     provenance = {
-        "schema": gcbc.CHECKPOINT_SCHEMA,
+        "schema": CHECKPOINT_SCHEMA,
         "dataset": dataset,
         "dataset_url": DATASET_URL,
         "train_sha256": archive.fingerprint,
@@ -236,7 +238,7 @@ def run(
     first_step = 0
     if resume is not None:
         previous = json.loads((resume / "manifest.json").read_text(encoding="utf-8"))
-        if previous.get("schema") == gcbc.LEGACY_SCHEMA:
+        if previous.get("schema") == LEGACY_SCHEMA:
             raise ValueError(
                 "Flax GCBC checkpoints can be used as frozen policies. Resume a Lightning run with --resume."
             )

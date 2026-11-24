@@ -11,7 +11,6 @@ from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.data.completion import CompletionInput
-from worth_reaching.envs import grid_routes as grid
 from worth_reaching.models import flow
 from worth_reaching.models.completion import FrozenCompletion, ModelSpec, pack_inputs
 from worth_reaching.models.training import (
@@ -21,6 +20,7 @@ from worth_reaching.models.training import (
     validate_resume,
     weights,
 )
+from worth_reaching.tasks.grid_routes import environment as grid
 
 DEMONSTRATION_SEED = 8112
 FAR_ROUTE_RATE = 0.25

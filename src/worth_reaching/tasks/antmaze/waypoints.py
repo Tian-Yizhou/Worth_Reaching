@@ -8,8 +8,8 @@ from pathlib import Path
 import numpy as np
 
 from worth_reaching.data.artifacts import code_revision, write_json
-from worth_reaching.envs import antmaze
-from worth_reaching.evaluation.antmaze import (
+from worth_reaching.tasks.antmaze import environment as antmaze
+from worth_reaching.tasks.antmaze.baseline import (
     EvalConfig,
     Policy,
     evaluation_starts,
@@ -17,7 +17,7 @@ from worth_reaching.evaluation.antmaze import (
     rollout,
     summarize_episodes,
 )
-from worth_reaching.models.gcbc import load_policy
+from worth_reaching.tasks.antmaze.checkpoint import load_policy
 
 NEIGHBORS = ((-1, 0), (0, -1), (1, 0), (0, 1))
 Cell = tuple[int, int]

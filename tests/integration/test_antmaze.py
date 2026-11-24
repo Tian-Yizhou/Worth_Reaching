@@ -22,7 +22,7 @@ def _archive(path, offset=0):
 
 def test_hindsight_sampling_respects_episode_endpoints(tmp_path):
     np = pytest.importorskip("numpy")
-    from worth_reaching.data.antmaze import load_antmaze_archive
+    from worth_reaching.tasks.antmaze.dataset import load_antmaze_archive
 
     path = tmp_path / "archive.npz"
     _archive(path)
@@ -58,7 +58,7 @@ def test_antmaze_cli_resumes_and_shares_saved_starts(tmp_path):
     np = pytest.importorskip("numpy")
     pytest.importorskip("ogbench")
     pytest.importorskip("flax")
-    from worth_reaching.envs import antmaze
+    from worth_reaching.tasks.antmaze import environment as antmaze
 
     dataset = "antmaze-large-navigate-v0"
     _archive(tmp_path / f"{dataset}.npz")
@@ -230,8 +230,8 @@ def test_antmaze_cli_resumes_and_shares_saved_starts(tmp_path):
 def test_official_success_on_last_action_overrides_timeout():
     pytest.importorskip("ogbench")
     np = pytest.importorskip("numpy")
-    from worth_reaching.envs.antmaze import AntMazeStart
-    from worth_reaching.evaluation.antmaze import rollout
+    from worth_reaching.tasks.antmaze.baseline import rollout
+    from worth_reaching.tasks.antmaze.environment import AntMazeStart
 
     start = AntMazeStart(1, 7, np.zeros(29), np.ones(29), np.zeros(10), np.zeros(2))
 
@@ -282,7 +282,7 @@ def test_candidate_probe_changes_only_first_attempt():
 def test_waypoint_plan_keeps_corners_and_excludes_terminal_goal():
     pytest.importorskip("ogbench")
     np = pytest.importorskip("numpy")
-    from worth_reaching.evaluation.antmaze_waypoints import (
+    from worth_reaching.tasks.antmaze.waypoints import (
         shortest_cells,
         waypoint_cells,
     )
@@ -297,7 +297,7 @@ def test_waypoint_plan_keeps_corners_and_excludes_terminal_goal():
 def test_waypoint_controller_advances_on_arrival_and_falls_back_on_timeout():
     pytest.importorskip("ogbench")
     np = pytest.importorskip("numpy")
-    from worth_reaching.evaluation.antmaze_waypoints import (
+    from worth_reaching.tasks.antmaze.waypoints import (
         FollowWaypoints,
         WaypointConfig,
     )

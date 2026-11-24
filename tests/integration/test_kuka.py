@@ -47,7 +47,7 @@ def test_kuka_native_labels_require_ordered_physical_contacts():
     if not (source / "gym_stacking/env.py").is_file():
         pytest.skip("Prepare the optional author-released Kuka simulator")
     from worth_reaching.data.kuka import block_states
-    from worth_reaching.envs.kuka import BLOCK_HEIGHT, KukaStacking
+    from worth_reaching.tasks.kuka.environment import BLOCK_HEIGHT, KukaStacking
 
     env = KukaStacking(source)
     try:

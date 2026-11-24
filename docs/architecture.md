@@ -18,7 +18,7 @@ The `src/worth_reaching/` package groups code by responsibility.
 
 | Package | Current responsibility |
 | --- | --- |
-| `envs/` | Versioned simulator adaptations and terminal task rules |
+| `tasks/<family>/environment.py` | Adapt the simulator and its task rules, expose public observations and actions, and support evaluator-controlled resets |
 | `data/` | Collect complete public trajectories, validate world splits and export masked training and development windows |
 | `models/` | Encode observations, predict masked latent positions and sample residual trajectories |
 | `models/training.py` | Configure Lightning trainers, step-indexed batches, checkpoints and logs |
@@ -26,9 +26,12 @@ The `src/worth_reaching/` package groups code by responsibility.
 | `evaluation/` | Replay, matched continuations, shared-bank comparisons and paired route scoring |
 | `cli.py` | Connect configurations to collection, window export, training and evaluation |
 | `tasks/pointmaze/` | Own the Maze2D task specifications, dataset and simulator adapters, controller, experiment commands and paired probes |
+| `tasks/antmaze/` | Load AntMaze archives and saved actors, train the GCBC baseline, and run latent and waypoint comparisons from matched starts |
 | `planning/` | Execute decoded goals from public observation and action histories through a supplied controller |
 
-PointMaze experiment runners assemble the task adapter, completion model and controller. The model consumes public histories, goal observations, remaining action budgets and query offsets. The task loader checks the observation and action shapes against its archive schema. AntMaze, Kuka, Scene and Puzzle also use the continuous completion model in `models/continuous_completion.py` and the window types in `data/trajectory_windows.py`. Craftax and the grid diagnostic use the discrete-action predictor in `models/completion.py`.
+Group tasks that share simulator behavior in one family. For example, Scene and Puzzle share the OGBench reset and step implementation in `tasks/ogbench_manipulation/environment.py`. Their presets select the observation schema, goals and action limit. A new family can follow the PointMaze or AntMaze layout and register its commands from a lightweight `cli.py`, so listing commands works without installing simulator extras.
+
+PointMaze and AntMaze runners assemble the task adapter, completion model and controller. The model consumes public histories, goal observations, remaining action budgets and query offsets. The task loader checks the observation and action shapes against its archive schema. AntMaze, Kuka, Scene and Puzzle also use the continuous completion model in `models/continuous_completion.py` and the window types in `data/trajectory_windows.py`. Craftax and the grid diagnostic use the discrete-action predictor in `models/completion.py`.
 
 The trajectory completion model will use public data from `data/`. Its executor will consume public observations and emit primitive actions. Evaluation owns simulator snapshots and restores them for matched repeats. [Trajectory completion design](trajectory-completion.md)
 

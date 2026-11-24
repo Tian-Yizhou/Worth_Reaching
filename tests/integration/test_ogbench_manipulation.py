@@ -8,7 +8,7 @@ import pytest
 def test_scene_restores_goal_physics_and_next_observation():
     np = pytest.importorskip("numpy")
     pytest.importorskip("ogbench")
-    from worth_reaching.envs.scene import Scene
+    from worth_reaching.tasks.ogbench_manipulation.scene import Scene
 
     env = Scene()
     try:
@@ -33,8 +33,8 @@ def test_puzzle_boards_restore_public_goal_and_native_physics(
 ):
     np = pytest.importorskip("numpy")
     pytest.importorskip("ogbench")
-    from worth_reaching.envs.ogbench_manipulation import Manipulation
-    from worth_reaching.envs.ogbench_tasks import PUZZLE_BOARDS
+    from worth_reaching.tasks.ogbench_manipulation.environment import Manipulation
+    from worth_reaching.tasks.ogbench_manipulation.spec import PUZZLE_BOARDS
 
     env = Manipulation(PUZZLE_BOARDS[board])
     try:

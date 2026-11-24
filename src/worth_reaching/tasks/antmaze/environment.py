@@ -10,7 +10,7 @@ import numpy as np
 import ogbench  # noqa: F401 - registers OGBench Gymnasium environments
 from numpy.typing import NDArray
 
-from worth_reaching.data.antmaze import OBSERVATION_SIZE
+from worth_reaching.tasks.antmaze.dataset import OBSERVATION_SIZE
 
 ENVIRONMENT = "antmaze-large-v0"
 SEED_BASE = {"dev": 17001, "test": 51001}

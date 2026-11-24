@@ -12,7 +12,7 @@ def test_window_cli_preserves_timing_and_hides_future(tmp_path):
 
     from worth_reaching.data.completion import load_completion_corpus
     from worth_reaching.data.craftax_trajectories import SPLIT_VERSION, episode_spec
-    from worth_reaching.envs.craftax import (
+    from worth_reaching.tasks.craftax.environment import (
         OBSERVATION_SCHEMA,
         SURVIVAL_TASK,
         TASK_RULES,

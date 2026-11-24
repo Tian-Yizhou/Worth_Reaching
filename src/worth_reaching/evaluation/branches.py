@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from worth_reaching.contracts import Action, Observation, PolicyInput
-from worth_reaching.envs.minigrid import TASK, KeyCorridorEpisode, Step
+from worth_reaching.tasks.keycorridor.environment import TASK, KeyCorridorEpisode, Step
 
 
 @dataclass(frozen=True, slots=True)

@@ -12,13 +12,6 @@ from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.data.ogbench import StateArchive, load_state_archive
-from worth_reaching.envs.ogbench_manipulation import STATE_SPEC, Manipulation
-from worth_reaching.envs.ogbench_tasks import (
-    ACTION_SIZE,
-    SEED_OFFSETS,
-    TASKS,
-    ManipulationTask,
-)
 from worth_reaching.models import gcbc
 from worth_reaching.models.continuous_completion import CompletionConfig, fit
 from worth_reaching.models.training import (
@@ -31,6 +24,16 @@ from worth_reaching.models.training import (
     weights,
 )
 from worth_reaching.planning.receding_goals import Policy, RecedingGoals
+from worth_reaching.tasks.ogbench_manipulation.environment import (
+    STATE_SPEC,
+    Manipulation,
+)
+from worth_reaching.tasks.ogbench_manipulation.spec import (
+    ACTION_SIZE,
+    SEED_OFFSETS,
+    TASKS,
+    ManipulationTask,
+)
 
 
 @dataclass(frozen=True, slots=True)
