@@ -1,6 +1,17 @@
 # Implementation plan
 
-Learn to complete missing segments of a trajectory in latent space. At deployment, the planner receives a public observation history, a terminal objective and the remaining action budget. It proposes several ways to connect the current history to the goal, executes toward an intermediate target and replans as it observes what happened. The first benchmark uses Craftax-Classic and the objective of crafting an iron pickaxe within the deadline and surviving through it. [Research design](docs/trajectory-completion.md)
+Learn to find intermediate goals in latent space that improve final task success. At deployment, the planner receives a public observation and action history, a terminal objective and the remaining action budget. The next milestone uses a controlled grid with ordered prerequisites and switchable terminal goals. [Research plan](docs/latent-subgoal-research.md)
+
+| Priority | Work | Completion evidence |
+| --- | --- | --- |
+| 1. Establish the dependency benchmark | Run paired interventions at one and two stages and switch the goal from the same start. | The dependency grid reports terminal effects by depth, goal, and target order through `wr dependency-grid`. |
+| 2. Test latent goal discovery | Generate a shared bank of candidates, estimate candidate value through matched attempts, and compare frozen scores before execution. | Held-out rollouts quantify candidate coverage and how much of it the selector can recover. |
+| 3. Test the effect of depth | Compare explicit intermediate goals against closed-loop terminal scoring with matched feedback and inference budgets. | The comparison reports paired terminal success and ranking quality by task depth. |
+| 4. Test the representation | Compare a reconstruction encoder and a predictive encoder trained with SIGReg under the same planner and goal interface. | Report collapse diagnostics, probes for decision-relevant state, and terminal success. |
+
+## Existing experiment infrastructure
+
+The masked trajectory completion and benchmark work below supplies training and evaluation components for the new comparison. [Trajectory completion design](docs/trajectory-completion.md)
 
 | Milestone | Work | Completion evidence |
 | --- | --- | --- |

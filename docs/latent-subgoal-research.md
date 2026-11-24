@@ -1,0 +1,60 @@
+# Research plan for discovering useful latent subgoals
+
+**Can a world model identify intermediate targets in latent space that improve final task success when pursued?** The planner receives the public observation and action history, the terminal goal, and the remaining action budget. It learns from trajectories without hand-labeled subgoals. The terminal objective can admit several valid routes or outcomes.
+
+## Hypotheses
+
+1. **Goal-dependent value.** From a matched start, pursuing some intermediate targets or ordered sequences improves terminal success under a shared executor and action budget. Changing the terminal goal can change which targets help.
+2. **Selection before execution.** A pretrained world model can propose useful targets and identify them before rollout. Frozen prediction error and conditional flow density are candidate scores. Train a separate outcome-based scorer only after measuring what the frozen scores can recover.
+3. **Task depth.** As the number of dependent decisions grows, predicting a distant latent endpoint may become less reliable for ranking plans. Test whether explicit intermediate targets preserve useful rankings and improve closed-loop success across task depths. Define depth by prerequisite decisions and log path length, action budget, and inference horizon separately.
+
+## Related work and controls
+
+| Work | Role in the experiment |
+| --- | --- |
+| Diffuser | Jointly generates state and action trajectories. It is a dense trajectory baseline. For a controlled proposal comparison, extract intermediate targets at matched times and hand them to the same executor. Recompute binary success using the same task protocol when comparing with our Maze2D runs. [Paper](https://proceedings.mlr.press/v162/janner22a.html) |
+| HDFlow | Freezes a learned RSSM, then generates high-level latent subgoals with diffusion and low-level segments with rectified flow. Its separate energy model uses successful and failed trajectories. Compare trajectory-level labels with paired-attempt labels on a shared candidate bank when both kinds of supervision are available. Treat published visual results as cross-paper references unless the protocols align. [Paper](https://arxiv.org/html/2605.04525v1#S4) |
+| Fast-JEPA | Uses intermediate latent predictions to construct an action proposal and directly predicts candidate endpoints from the observed anchor to rank complete sequences. It avoids recursive state prediction at scoring time. Its standard experiments plan 25 actions per query with a 50-action episode limit. Build a closed-loop endpoint-scoring control and measure rank quality as task depth increases. [Paper](https://arxiv.org/html/2611.25927v1) |
+| LeJEPA | Uses prediction plus SIGReg to prevent representation collapse. Test the regularizer in a dynamics model and probe whether the representation retains task-relevant history. LeWorldModel is an action-conditioned implementation reference, and Fast-JEPA also uses SIGReg. [LeJEPA](https://arxiv.org/abs/2511.08544) · [LeWorldModel](https://arxiv.org/abs/2603.19312) |
+| FF-JEPA | Predicts the next latent subgoal and uses an action-conditioned model for short-range planning. The comparison motivates testing explicitly goal-dependent subgoal value, compositional transfer, and matched interventions. [Paper](https://arxiv.org/abs/2606.09311) |
+
+## Starting evidence
+
+- In the 391-action Maze2D Medium pilot, direct tracking succeeded on 23 of 64 starts. Among its 41 failures, retrospective inspection found at least one candidate that arrived and then succeeded on 15 and 10 starts for the two checkpoints. Selecting the lowest conditional flow energy before rollout yielded 25 and 18 successes, respectively, tying the highest-energy rule within each checkpoint. Better decoded trajectory error and candidate coverage motivate further testing of selection. [Source and protocol](experiments.md#test-latent-energy-against-terminal-success)
+- The two-goal grid shows that changing the endpoint changes the predicted route. Direct execution succeeds on about 99.6% of the ordinary grid's development attempts. In the stochastic passage pilot, terminal-outcome ranking improved on arrival ranking for the frozen proposer, while the end-to-end rates were similar to the risk-aware direct control. These runs motivate a task in which reaching superficially similar states can leave very different options for later decisions. [Grid diagnostics](experiments.md#train-from-execution-feedback)
+
+## Experiment sequence
+
+### 1. Establish a controlled multi-stage benchmark
+
+Use the dependency grid. Two destinations share the same start, and routes require either one or two keys and gates. Some keys lie on a direct route, and others require a detour. The two-depth comparison keeps map geometry and action budget fixed for each layout. Random action slips are paired across branches and goal switches. Use layout-disjoint splits. After verifying the benchmark, collect trajectories that cover the individual skills and reserve some combinations of skills and layouts for separate generalization tests. [Run the diagnostic](experiments.md#compare-ordered-targets-in-the-dependency-grid)
+
+Use predeclared key locations as diagnostic targets. Compare direct tracking, individual targets, and both orders of the target pair. Record whether a candidate that helps reach one terminal goal loses its advantage when the goal changes. A full-state planner can help verify benchmark solvability. An executor following public geometry provides a local control for the matched attempts.
+
+**Exit criterion.** The public runner reproduces arrival, timeout, recovery, and final-action success. Matched attempts expose goal-dependent effects and order-dependent effects at depth two. Verify the effect on development layouts before training a selector.
+
+The initial CPU run used 16 development layouts, both goals, and 16 paired repeats per start. At depth two, swapping the goal reversed the ranking of the two lane-specific ordered targets on all 16 layouts. The goal-matched entry-then-inner sequence succeeded on 511 of 512 attempts, compared with 199 of 512 for the reversed sequence and 112 of 512 for local direct tracking. These results check the task design with predeclared targets. The run is recorded under `results/dependency-grid-dev-02/`.
+
+### 2. Separate discovery, selection, and execution
+
+Train the existing masked latent predictor on public trajectories as the first representation baseline. Propose goals from latent trajectory completion and compare with matched-time replay targets and geometric or observation-space candidates. Use the same candidate counts, target deadlines, executor, and budget. Include a diagnostic with executable targets from recorded trajectories to measure controller competence.
+
+Declare candidates and scores before rollout. From each start, run the same controller toward each candidate until arrival, timeout, or native termination. Use the same continuation on the observed state with the actual remaining budget. Count terminal successes after misses. Compare no intermediate target, uniform candidate selection, lowest frozen energy, lowest latent prediction error, and matched arrival or proximity controls on the same pool. Use reversed energy as a score direction check. Assess retrospective candidate capacity separately, with independent repeat pools to select and evaluate the reference in stochastic conditions.
+
+**Exit criterion.** Measure both candidate coverage and the gain achieved by prospective selection on held-out worlds. If the pool has useful targets and frozen ranking leaves a clear gap, compare outcome-based scoring learned from training branches with the frozen rules. If coverage is weak, inspect achieved-target execution and compare alternative proposal sources before refining a scorer.
+
+### 3. Compare explicit subgoals with endpoint scoring
+
+Compare a direct terminal-latent scoring planner with an explicit subgoal planner. Give both access to the same public feedback, representation, training data, primitive-action budget and comparable opportunities to replan. Keep the candidate construction and set fixed in a scoring ablation. Measure how both scores rank actual outcomes as task depth grows. In the end-to-end comparison, report success across matched inference budgets, with candidate counts, model calls, and latency measured separately.
+
+**Exit criterion.** Estimate the paired success-rate difference by depth with uncertainty and report candidate ranking at the same depths. A short-task tie and a long-task gain would support the depth hypothesis. Similar scaling curves would constrain that claim. Extend the strongest controlled protocol to one external task with verified executable segments, such as OGBench Scene. Maze2D remains the direct Diffuser comparison. Craftax supplies a later compound, stochastic terminal objective.
+
+### 4. Isolate the representation contribution
+
+Compare the current frozen reconstruction encoder with an end-to-end predictive encoder regularized by SIGReg. Hold the planner, data and goal interface fixed and match capacity where possible. Track embedding covariance or effective rank as collapse diagnostics. Probe whether the representation distinguishes public histories with different inventory, lock state or grasp status, and whether those distinctions predict future feasibility. Test the same paired terminal-success endpoint. Add a within-architecture regularizer ablation to attribute changes specifically to SIGReg.
+
+## Reporting
+
+The primary outcome is the paired change in terminal success under a fixed action budget. Report it across held-out layouts, task depths, and training seeds, with uncertainty clustered by layout. Record arrival, attempt time, missed-target recoveries, goal-switch rankings, and candidate coverage as diagnostics. Choose practical effect thresholds and analysis rules on development data, then freeze them before confirmation. Meter environment interactions used for training, feedback, and evaluation separately. Keep snapshots, simulator random streams, reference rankings, and test outcomes on the evaluator side of the interface.
+
+[Implementation plan](../PLAN.md) · [Architecture](architecture.md) · [Running experiments](experiments.md)
