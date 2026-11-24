@@ -103,6 +103,8 @@ def test_dependency_grid_latent_cli_uses_public_windows_and_frozen_choices(tmp_p
             "2",
             "--density-samples",
             "4",
+            "--selector-repeats",
+            "2",
         ],
         check=True,
         capture_output=True,
@@ -113,6 +115,25 @@ def test_dependency_grid_latent_cli_uses_public_windows_and_frozen_choices(tmp_p
     assert set(manifest["layouts"]["evaluation"]) <= dev
     assert manifest["query_steps"] == [4, 8]
     assert manifest["collection_seed"] == 7
+    assert manifest["outcome_selector"]["repeats"] == 2
+    weights = (out / "selector.npz").read_bytes()
+    assert manifest["outcome_selector"]["weights_sha256"] == sha256(weights).hexdigest()
+    selector_data = [
+        json.loads(line)
+        for line in (out / "selector-training-attempts.jsonl").read_text().splitlines()
+    ]
+    assert {row["layout_id"] for row in selector_data} == train
+    for row in selector_data:
+        assert all(
+            episode.split(":")[0] != row["layout_id"]
+            for episode in row["replay_episode_ids"]
+        )
+        candidates = row["candidates"]
+        assert candidates[0]["id"] == "direct"
+        assert len({tuple(map(tuple, c["targets"])) for c in candidates}) == len(
+            candidates
+        )
+        assert all(len(c["trials"]) == 2 for c in candidates)
     bank_path = out / "candidate-bank.json"
     assert (
         manifest["candidate_bank_sha256"] == sha256(bank_path.read_bytes()).hexdigest()
@@ -146,3 +167,17 @@ def test_dependency_grid_latent_cli_uses_public_windows_and_frozen_choices(tmp_p
             result["arms"]["lowest_energy"]["success"]
             == sum(trial["success"] for trial in picked) / 2
         )
+        scores = declaration["outcome_scores"]
+        for source in ("flow", "replay"):
+            source_scores = scores[source]
+            probabilities = source_scores["probabilities"]
+            chosen = max(range(2), key=probabilities.__getitem__)
+            if probabilities[chosen] <= scores["direct_probability"]:
+                assert source_scores["chosen_index"] is None
+                trials = result["outcomes"]["direct"]
+            else:
+                assert source_scores["chosen_index"] == chosen
+                trials = result["outcomes"][source][chosen]
+            assert result["arms"][f"{source}_outcome"]["success"] == sum(
+                trial["success"] for trial in trials
+            ) / len(trials)

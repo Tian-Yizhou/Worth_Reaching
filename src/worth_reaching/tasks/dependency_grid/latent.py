@@ -13,6 +13,7 @@ from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.data.completion import CompletionExample
+from worth_reaching.evaluation.attempt_selection import fit_attempt_heads
 from worth_reaching.models import flow
 from worth_reaching.models.completion import (
     FrozenCompletion,
@@ -26,7 +27,7 @@ from worth_reaching.models.completion import (
 )
 from worth_reaching.models.latent_energy import prefix_energy
 from worth_reaching.models.training import describe, stream_seed, weights
-from worth_reaching.tasks.dependency_grid import dataset, experiment
+from worth_reaching.tasks.dependency_grid import dataset, experiment, outcome_scoring
 from worth_reaching.tasks.dependency_grid import environment as grid
 
 SCHEMA = "dependency_grid_latent_v1"
@@ -176,7 +177,7 @@ def _declare(
     reset = public.observations[0]
     _, blind_decoded = predict(completion.codec, goal_blind, packed.without_goal())
     nearest = sorted(
-        replay,
+        (source for source in replay if source.world_id != layout.id),
         key=lambda row: (
             float(np.square(row.inputs.observations[0] - reset).sum()),
             row.world_id,
@@ -227,18 +228,19 @@ def _declare(
     }
 
 
-def _evaluate(layout: grid.Layout, row: dict, config: EvaluationConfig) -> dict:
-    def streams(name: str):
-        rng = Random(f"{SCHEMA}:{name}:{config.seed}:{layout.id}")
-        return [
-            tuple(
-                rng.random() < config.slip_probability for _ in range(experiment.BUDGET)
-            )
-            for _ in range(config.repeats)
-        ]
+def _slips(
+    layout: grid.Layout, config: EvaluationConfig, stream: str, repeats: int
+) -> list[tuple[bool, ...]]:
+    rng = Random(f"{SCHEMA}:{stream}:{config.seed}:{layout.id}")
+    return [
+        tuple(rng.random() < config.slip_probability for _ in range(experiment.BUDGET))
+        for _ in range(repeats)
+    ]
 
-    evaluation = streams("evaluation")
-    reference = streams("reference")
+
+def _evaluate(layout: grid.Layout, row: dict, config: EvaluationConfig) -> dict:
+    evaluation = _slips(layout, config, "evaluation", config.repeats)
+    reference = _slips(layout, config, "reference", config.repeats)
     depth, goal = row["depth"], row["terminal"]
 
     def attempts(targets, repeats):
@@ -285,6 +287,11 @@ def _evaluate(layout: grid.Layout, row: dict, config: EvaluationConfig) -> dict:
         arms[f"{source}_uniform"] = [trial for trials in results for trial in trials]
         arms[f"{source}_reference_best"] = results[best]
         outcomes[source] = [[asdict(trial) for trial in trials] for trials in results]
+        if "outcome_scores" in row:
+            chosen = row["outcome_scores"][source]["chosen_index"]
+            arms[f"{source}_outcome"] = (
+                arms["direct"] if chosen is None else results[chosen]
+            )
         if source == "flow":
             arms.update(
                 {choice: results[index] for choice, index in row["choices"].items()}
@@ -349,14 +356,24 @@ def _summarize(outcomes: list[dict], bank: list[dict]) -> dict:
                 "cases_better_than_direct": int((delta > 0).sum()),
             }
         contrasts = {}
-        for method, control in (
+        comparisons = (
             ("lowest_energy", "flow_uniform"),
             ("lowest_energy", "highest_energy"),
             ("lowest_forecast_mse", "flow_uniform"),
             ("flow_reference_best", "flow_uniform"),
             ("flow_reference_best", "replay_reference_best"),
             ("deterministic_forecast", "goal_blind_forecast"),
-        ):
+        )
+        if "flow_outcome" in rates:
+            comparisons += (
+                ("flow_outcome", "flow_uniform"),
+                ("flow_outcome", "lowest_energy"),
+                ("flow_outcome", "flow_reference_best"),
+                ("replay_outcome", "replay_nearest"),
+                ("replay_outcome", "replay_reference_best"),
+                ("flow_outcome", "replay_outcome"),
+            )
+        for method, control in comparisons:
             delta = rates[method] - rates[control]
             contrasts[f"{method}_vs_{control}"] = {
                 "difference": float(delta.mean()),
@@ -378,6 +395,15 @@ def _summarize(outcomes: list[dict], bank: list[dict]) -> dict:
                 for source in ("flow", "replay")
             },
         }
+        if "flow_outcome" in rates:
+            summary[str(depth)]["outcome_direct_choices"] = {
+                source: sum(
+                    row["outcome_scores"][source]["chosen_index"] is None
+                    for row in bank
+                    if row["depth"] == depth
+                )
+                for source in ("flow", "replay")
+            }
     return summary
 
 
@@ -389,6 +415,7 @@ def run(
     collection_seed: int,
     demonstrations: int,
     flow_updates: int,
+    selector_repeats: int | None = None,
 ) -> dict:
     layouts = grid.layouts(evaluation.split)
     if evaluation.layouts is not None and not 1 <= evaluation.layouts <= len(layouts):
@@ -400,6 +427,13 @@ def run(
     ):
         raise ValueError(
             "Use a nonnegative collection seed, positive collection and flow counts, and two model queries"
+        )
+    train_layouts = grid.layouts("train")
+    if selector_repeats is not None and (
+        selector_repeats < 1 or evaluation.candidates >= len(train_layouts)
+    ):
+        raise ValueError(
+            "Use positive selector repeats and leave one training layout out of each replay bank"
         )
     layouts = layouts[: evaluation.layouts]
     out.mkdir(parents=True, exist_ok=False)
@@ -431,27 +465,77 @@ def run(
             }
         )
     )
-    bank = [
-        _declare(
-            completion,
-            goal_blind,
-            fitted_flow,
-            scale,
-            replay[depth, goal],
-            layout,
-            depth,
-            goal,
-            lane.goal,
-            evaluation,
+
+    def declare(case_layouts):
+        for layout, depth, goal, lane in _cases(case_layouts):
+            yield (
+                layout,
+                _declare(
+                    completion,
+                    goal_blind,
+                    fitted_flow,
+                    scale,
+                    replay[depth, goal],
+                    layout,
+                    depth,
+                    goal,
+                    lane.goal,
+                    evaluation,
+                ),
+            )
+
+    selector = None
+    selector_metadata = {}
+    selector_steps = 0
+    if selector_repeats is not None:
+        training_attempts = [
+            outcome_scoring.collect_attempts(
+                layout,
+                row,
+                _slips(layout, evaluation, "selector_training", selector_repeats),
+            )
+            for layout, row in declare(train_layouts)
+        ]
+        with (out / "selector-training-attempts.jsonl").open(
+            "w", encoding="utf-8"
+        ) as stream:
+            for row in training_attempts:
+                stream.write(json.dumps(row) + "\n")
+        selector = fit_attempt_heads(training_attempts)
+        selector_path = out / "selector.npz"
+        np.savez(
+            selector_path,
+            mean=selector.mean,
+            scale=selector.scale,
+            attempt=selector.attempt,
         )
-        for layout, depth, goal, lane in _cases(layouts)
-    ]
+        selector_steps = sum(
+            trial["environment_steps"]
+            for row in training_attempts
+            for candidate in row["candidates"]
+            for trial in candidate["trials"]
+        )
+        selector_metadata = {
+            "outcome_selector": {
+                "schema": outcome_scoring.FEATURE_SCHEMA,
+                "repeats": selector_repeats,
+                "cases": len(training_attempts),
+                "weights_sha256": sha256(selector_path.read_bytes()).hexdigest(),
+                "stream": "selector_training",
+            },
+        }
+    declared = list(declare(layouts))
+    bank = [row for _, row in declared]
+    if selector is not None:
+        for layout, row in declared:
+            row["outcome_scores"] = outcome_scoring.score_pools(selector, layout, row)
     bank_path = out / "candidate-bank.json"
     write_json(bank_path, bank)
     write_json(
         out / "manifest.json",
         {
             "schema": SCHEMA,
+            **selector_metadata,
             "code_revision": code_revision(),
             "compute": describe(),
             "versions": {
@@ -482,8 +566,7 @@ def run(
             "candidate_bank_sha256": sha256(bank_path.read_bytes()).hexdigest(),
         },
     )
-    by_id = {layout.id: layout for layout in layouts}
-    outcomes = [_evaluate(by_id[row["layout_id"]], row, evaluation) for row in bank]
+    outcomes = [_evaluate(layout, row, evaluation) for layout, row in declared]
     with (out / "attempts.jsonl").open("w", encoding="utf-8") as stream:
         for row in outcomes:
             stream.write(json.dumps(row) + "\n")
@@ -500,5 +583,7 @@ def run(
         ),
         "by_depth": _summarize(outcomes, bank),
     }
+    if selector is not None:
+        summary["selector_training_environment_steps"] = selector_steps
     write_json(out / "summary.json", summary)
     return summary

@@ -44,6 +44,7 @@ def _latent(args: argparse.Namespace) -> dict:
         collection_seed=args.collection_seed,
         demonstrations=args.demonstrations,
         flow_updates=args.flow_updates,
+        selector_repeats=args.selector_repeats,
     )
 
 
@@ -74,6 +75,11 @@ def register_commands(commands) -> None:
     ):
         latent.add_argument(f"--{name}", type=int)
     latent.add_argument("--flow-updates", type=int, default=400)
+    latent.add_argument(
+        "--selector-repeats",
+        type=int,
+        help="Fit a shared outcome scorer with this many paired repeats per training target",
+    )
     latent.add_argument("--collection-seed", type=int, default=7)
     latent.add_argument(
         "--demonstrations",
