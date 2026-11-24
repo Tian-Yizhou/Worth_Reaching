@@ -195,7 +195,10 @@ def test_manipulation_cli_trains_and_reuses_start_and_controller(
                 np.testing.assert_array_equal(parallel[key], serial[key])
 
 
-def test_scene_reachability_cli_pairs_recorded_actions_with_frozen_actor(tmp_path):
+@pytest.mark.parametrize("singular_cube", [False, True])
+def test_scene_reachability_cli_pairs_recorded_actions_with_frozen_actor(
+    tmp_path, singular_cube
+):
     np = pytest.importorskip("numpy")
     torch = pytest.importorskip("torch")
     pytest.importorskip("ogbench")
@@ -209,6 +212,12 @@ def test_scene_reachability_cli_pairs_recorded_actions_with_frozen_actor(tmp_pat
     env = SceneEnv(env_type="scene", mode="data_collection", terminate_at_goal=False)
     try:
         observation, info = env.reset(seed=17)
+        if singular_cube:
+            pose = env.data.qpos.copy()
+            cube_quat = int(env.model.joint("object_joint_0").qposadr[0]) + 3
+            pose[cube_quat : cube_quat + 4] = np.sqrt(0.5) * np.array([1, 0, 1, 0])
+            env.set_state(pose, env.data.qvel.copy(), info["button_states"])
+            observation = env.compute_observation()
         action = np.array([0.4, 0, 0, 0, 0], dtype=np.float32)
         observations, qpos, qvel, buttons = [], [], [], []
         for step in range(17):
@@ -220,6 +229,9 @@ def test_scene_reachability_cli_pairs_recorded_actions_with_frozen_actor(tmp_pat
                 observation, _, _, _, info = env.step(action)
     finally:
         env.close()
+    if singular_cube:
+        # The cube quaternion matches the reset while its undefined yaw is archived differently.
+        observations[0][26:28] *= -1
     np.savez(
         tmp_path / "scene-play-v0-val.npz",
         observations=np.asarray(observations, dtype=np.float32),
@@ -285,6 +297,9 @@ def test_scene_reachability_cli_pairs_recorded_actions_with_frozen_actor(tmp_pat
     assert case["target_row"] - case["start_row"] == 16
     assert case["replay_matches_at_offset"]
     assert case["actor_arrival"] is None
+    assert case["initial_cube_yaw_singular"] is singular_cube
+    if singular_cube:
+        assert case["initial_cube_yaw_error"] > 1
     with np.load(out / "trajectories.npz", allow_pickle=False) as paths:
         np.testing.assert_array_equal(
             paths["0_actor_observations"][0], paths["0_replay_observations"][0]

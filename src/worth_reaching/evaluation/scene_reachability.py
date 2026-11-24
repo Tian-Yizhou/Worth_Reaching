@@ -20,9 +20,43 @@ from worth_reaching.tasks.ogbench_manipulation.spec import ACTION_SIZE, SCENE
 EFFECTOR = slice(12, 15)
 CONTACT = 18
 CUBE = slice(19, 22)
+CUBE_QUATERNION = slice(22, 26)
+CUBE_YAW = slice(26, 28)
 BUTTON_STATES = [28, 29, 32, 33]
 SLIDES = [36, 38]
 ARRIVAL_METERS = 0.04
+RESTORE_TOLERANCE = 1e-3
+
+
+def _cube_yaw_is_singular(observation: np.ndarray) -> bool:
+    w, x, y, z = observation[CUBE_QUATERNION].astype(np.float64)
+    # Yaw is the direction of the cube's local x-axis projected onto the XY plane.
+    projection = np.hypot(w * w + x * x - y * y - z * z, 2 * (w * z + x * y))
+    return bool(projection <= 8 * np.finfo(np.float32).eps)
+
+
+def _restoration_errors(initial: np.ndarray, archived: np.ndarray, row: int) -> dict:
+    error = np.abs(initial - archived)
+    checked = np.ones(error.shape, dtype=bool)
+    # The archive omits contact forces, which MuJoCo regenerates after stepping.
+    checked[CONTACT] = False
+    singular = _cube_yaw_is_singular(initial) and _cube_yaw_is_singular(archived)
+    if singular:
+        # The quaternion still defines the cube's orientation at the Euler singularity.
+        checked[CUBE_YAW] = False
+    mismatched = np.flatnonzero(
+        ~np.isfinite(error) | (checked & (error > RESTORE_TOLERANCE))
+    )
+    if mismatched.size:
+        raise ValueError(
+            f"Scene state at archive row {row} did not restore "
+            f"(observation indices {mismatched.tolist()})"
+        )
+    return {
+        "initial_contact_error": float(error[CONTACT]),
+        "initial_cube_yaw_error": float(error[CUBE_YAW].max()),
+        "initial_cube_yaw_singular": singular,
+    }
 
 
 def _scene_match(observation: np.ndarray, goal: np.ndarray) -> np.ndarray:
@@ -311,13 +345,9 @@ def run(
                     initial = np.asarray(env.compute_observation(), dtype=np.float32)
                 if replay_start is None:
                     replay_start = initial
-                    # Archive rows omit contact forces, regenerated after stepping.
-                    error = np.abs(initial - archive.observations[row])
-                    if np.delete(error, CONTACT).max() > 1e-3:
-                        raise ValueError(
-                            f"Scene state at archive row {row} did not restore"
-                        )
-                    attempt["initial_contact_error"] = float(error[CONTACT])
+                    attempt.update(
+                        _restoration_errors(initial, archive.observations[row], row)
+                    )
                 elif not np.array_equal(initial, replay_start):
                     raise ValueError(
                         f"Scene attempts at archive row {row} did not start together"
