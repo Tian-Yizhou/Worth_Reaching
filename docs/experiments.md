@@ -88,6 +88,26 @@ The fitted scorer ranks each evaluation pool once before rollouts, with direct t
 
 For a short smoke run, add `--selector-repeats 2` to the smoke settings above. The comparison evaluates one high-level choice per start with a fixed continuation. [Research plan](latent-subgoal-research.md#2-separate-discovery-selection-and-execution)
 
+## Compose latent goals under action budgets
+
+Install `training-cpu` and `craftax` as for the dependency-grid latent workflow. Run the controlled task with two-, three-, and four-action budgets.
+
+```bash
+mkdir -p results
+run_dir="$(mktemp -d results/budget-routes.XXXXXX)"
+uv run --no-sync wr budget-routes --seed 7 --out "$run_dir/seed-7"
+```
+
+The shortcut reaches the same terminal as the bypass and the gate routes. A successful supply stop can raise the gate route's terminal odds. The start may already be supplied. The planner observes its inventory and a coarse risk profile. World-specific success probabilities and future draws belong to the evaluator. Repeats are matched across arms and share the same random prefixes across budgets.
+
+The shared completion model compresses 11 public features into six latent dimensions and predicts the states at offsets 1 and 2. Scripted successful reset trajectories cover shortcut, bypass and gate routes. They omit the complete supply-then-gate route. A local continuation from the supply state records that segment. Independent random training exploration supplies one-step transition counts, so the scorer can observe individual transitions from the held-out full route. During validation the worlds vary by risk draw and starting inventory on a common public graph.
+
+The composer takes distinct targets from the same latent samples used by the joint baseline, tries singles and legal ordered pairs, and retains the source slot for each target. Joint samples, composed prefixes, and matched-context training replay share one public graph controller and one learned transition scorer. This first scorer propagates empirical public-state transitions to compute the probability of terminal success within the remaining budget. Planning energy is the negative log of that probability. A separate baseline ranks the original joint samples by flow density. All three pools share a candidate cap and the manifest records the sample budget and per-case rankings. The fixed-pool diagnostic ranks the same four-action candidate bank at all three budgets.
+
+The replan arm starts with the selected composition. On reaching its first target it can replace the suffix using the observed inventory and remaining budget. It reuses proposed nodes and reports extra scoring calls. Rarity counts ordered pairs in successful training demonstrations with the same public profile, start inventory and budget, once per eligible episode. Both targets need individual support. Pairs at or below 5% support qualify. The evaluator deduplicates implied execution paths within each world and budget, screens rare paths using independent reference repeats, then counts a confirmed path if it reaches both targets and succeeds on at least half of the evaluation repeats and improves terminal success over direct tracking by at least 10 percentage points.
+
+`candidate-bank.json` records the frozen choices, latent samples, support counts, and planning energy. For a selected pair, it also declares the two single targets and the reversed order as paired controls. `attempts.json` records actual actions and outcomes. `summary.json` reports paired terminal success, budget-dependent choices, suffix changes, and rare-path coverage. For a smoke run, append `--layouts 1 --repeats 4 --candidates 4 --demonstrations 4 --exploration 24 --encoder-updates 2 --updates 2 --flow-updates 2`. Reserve `--split test` for the fixed confirmation protocol. [Research plan](latent-subgoal-research.md#3-compose-alternative-routes-under-a-budget)
+
 ## Check a development installation
 
 From the repository root, install the CPU dependencies used by CI and run the repository checks.

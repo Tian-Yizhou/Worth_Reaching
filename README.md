@@ -43,6 +43,7 @@ Choose an experiment below for its data preparation and run commands.
 
 | Task | What you can test |
 | --- | --- |
+| [Budgeted routes](docs/experiments.md#compose-latent-goals-under-action-budgets) | Compare latent goal composition and replay across budgets in a stochastic task with several routes to the same endpoint. |
 | [Dependency grid](docs/experiments.md#compare-ordered-targets-in-the-dependency-grid) | Measure the effect of target order and [compare learned selection](docs/experiments.md#learn-to-select-a-goal-from-terminal-outcomes) on latent and replay proposals. |
 | [MiniGrid KeyCorridor](docs/experiments.md#replay-a-keycorridor-decision) | Branch at one decision and inspect how a single action changes the outcome at the deadline. |
 | [Two-goal grid](docs/experiments.md#sample-and-execute-alternative-routes) | Switch the terminal goal on the same layout, sample alternate routes and train from execution feedback. |
