@@ -19,10 +19,11 @@ The `src/worth_reaching/` package groups code by responsibility.
 | Package | Current responsibility |
 | --- | --- |
 | `tasks/<family>/environment.py` | Adapt the simulator and its task rules, expose public observations and actions, and support evaluator-controlled resets |
-| `data/` | Collect complete public trajectories, validate world splits and export masked training and development windows |
+| `data/` | Represent public completion examples and masked trajectory windows, read shared OGBench archives and record experiment artifacts |
 | `models/` | Encode observations, predict masked latent positions and sample residual trajectories |
 | `models/training.py` | Configure Lightning trainers, step-indexed batches, checkpoints and logs |
-| `policies/` | Recurrent expert inference from public observations |
+| `tasks/craftax/` | Collect expert and random episodes, validate world splits and export craft-and-survive windows |
+| `tasks/kuka/dataset.py` | Read Kuka demonstration clips and encode block-stacking goals |
 | `evaluation/` | Replay, matched continuations, shared-bank comparisons and paired route scoring |
 | `cli.py` | Connect configurations to collection, window export, training and evaluation |
 | `tasks/pointmaze/` | Own the Maze2D task specifications, dataset and simulator adapters, controller, experiment commands and paired probes |
@@ -59,7 +60,7 @@ Each compressed trajectory record contains the episode ID, initial observation, 
 
 Random and PPO-RNN collection share the same environment and transition seed streams for each world. Their policy sampling streams are separate from the simulator. PPO-RNN receives only the current public symbolic observation and its per-episode recurrent memory. The manifest records the checkpoint step and actor digest, and the split label is assigned by world regardless of policy.
 
-`data/craftax_trajectories.py` loads completed random and expert collections through the same interface. It validates task rules and verifies episode IDs and split assignments against the original world seeds. Its split iterator yields complete public episode records without loading a policy checkpoint or constructing a simulator.
+`tasks/craftax/dataset.py` loads completed random and expert collections through the same interface. It validates task rules and verifies episode IDs and split assignments against the original world seeds. Its split iterator yields complete public episode records without loading a policy checkpoint or constructing a simulator.
 
 `evaluation/craftax.py` reconstructs a live start from recorded actions and verifies each replayed observation. It returns the recurrent memory immediately before the current observation. A continuation can act directly or run a declared action prefix first. Forced actions still advance policy memory from each public observation. Match repeat keys across alternatives to compare outcomes on the same transition and policy random streams.
 

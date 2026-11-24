@@ -28,7 +28,7 @@ def _run_pilot(args: argparse.Namespace) -> dict[str, object]:
 
 
 def _collect(args: argparse.Namespace) -> dict[str, object]:
-    from worth_reaching.data.collection import CollectionConfig, collect
+    from worth_reaching.tasks.craftax.collection import CollectionConfig, collect
     from worth_reaching.tasks.craftax.environment import TASK
 
     config = CollectionConfig.load(
@@ -52,7 +52,8 @@ def _attempt_compare(args: argparse.Namespace) -> dict[str, object]:
 
 
 def _prepare_windows(args: argparse.Namespace) -> dict[str, object]:
-    from worth_reaching.data.completion import WindowConfig, prepare_craftax_windows
+    from worth_reaching.data.completion import WindowConfig
+    from worth_reaching.tasks.craftax.windows import prepare_craftax_windows
 
     config = WindowConfig(
         args.seed, args.windows_per_episode, args.min_span, args.max_span

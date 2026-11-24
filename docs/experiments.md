@@ -99,7 +99,7 @@ tmux new-session -d -s wr-craftax-random -c "$PWD" \
 
 Attach with `tmux attach -t wr-craftax-expert` or `tmux attach -t wr-craftax-random`. The launcher prints the resolved path and writes the log next to the run.
 
-A completed run contains `manifest.json` for configuration and provenance, `splits.json` for world assignments, `trajectories.jsonl.gz` for observations and actions, and `summary.json` for counts and outcomes. The loader `worth_reaching.data.craftax_trajectories.load_craftax_archive` validates the manifest and streams complete episodes with `archive.iter_episodes("train")`. Fit models on the training split, choose settings in development, and reserve the test split for final evaluation.
+A completed run contains `manifest.json` for configuration and provenance, `splits.json` for world assignments, `trajectories.jsonl.gz` for observations and actions, and `summary.json` for counts and outcomes. The loader `worth_reaching.tasks.craftax.dataset.load_craftax_archive` validates the manifest and streams complete episodes with `archive.iter_episodes("train")`. Fit models on the training split, choose settings in development, and reserve the test split for final evaluation.
 
 ## Prepare masked trajectory windows
 
@@ -110,7 +110,7 @@ The export stores the sampling recipe and source split fingerprint in `manifest.
 ```python
 from pathlib import Path
 
-from worth_reaching.data.completion import load_completion_corpus
+from worth_reaching.tasks.craftax.windows import load_completion_corpus
 
 corpus = load_completion_corpus(Path("results/completion.example/windows"))
 example = next(corpus.iter_examples("train"))

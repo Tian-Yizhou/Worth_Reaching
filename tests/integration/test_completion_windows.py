@@ -10,13 +10,13 @@ def test_window_cli_preserves_timing_and_hides_future(tmp_path):
     pytest.importorskip("craftax")
     import numpy as np
 
-    from worth_reaching.data.completion import load_completion_corpus
-    from worth_reaching.data.craftax_trajectories import SPLIT_VERSION, episode_spec
+    from worth_reaching.tasks.craftax.dataset import SPLIT_VERSION, episode_spec
     from worth_reaching.tasks.craftax.environment import (
         OBSERVATION_SCHEMA,
         SURVIVAL_TASK,
         TASK_RULES,
     )
+    from worth_reaching.tasks.craftax.windows import load_completion_corpus
 
     specs = [episode_spec(seed) for seed in range(100)]
     train, failure = [spec for spec in specs if spec.split == "train"][:2]

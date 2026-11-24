@@ -5,7 +5,7 @@ import pytest
 
 def test_kuka_windows_preserve_clips_and_only_condition_on_block_positions(tmp_path):
     np = pytest.importorskip("numpy")
-    from worth_reaching.data.kuka import (
+    from worth_reaching.tasks.kuka.dataset import (
         block_states,
         goal_features,
         load_clips,
@@ -46,7 +46,7 @@ def test_kuka_native_labels_require_ordered_physical_contacts():
     source = Path("results/external/diffuser-kuka")
     if not (source / "gym_stacking/env.py").is_file():
         pytest.skip("Prepare the optional author-released Kuka simulator")
-    from worth_reaching.data.kuka import block_states
+    from worth_reaching.tasks.kuka.dataset import block_states
     from worth_reaching.tasks.kuka.environment import BLOCK_HEIGHT, KukaStacking
 
     env = KukaStacking(source)
