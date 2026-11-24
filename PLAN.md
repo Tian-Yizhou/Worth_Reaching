@@ -1,12 +1,13 @@
 # Implementation plan
 
-Learn to find intermediate goals in latent space that improve final task success. At deployment, the planner receives a public observation and action history, a terminal objective and the remaining action budget. The next milestone uses a controlled grid with ordered prerequisites and switchable terminal goals. [Research plan](docs/latent-subgoal-research.md)
+Learn to find intermediate goals in latent space that improve final task success. At deployment, the planner receives a public observation and action history, a terminal objective and the remaining action budget. The controlled studies test ordered prerequisites, switchable goals, and different routes to a common terminal. [Research plan](docs/latent-subgoal-research.md)
 
 | Priority | Work | Completion evidence |
 | --- | --- | --- |
 | 1. Establish the dependency benchmark | Run paired interventions at one and two stages and switch the goal from the same start. | The dependency grid reports terminal effects by depth, goal, and target order through `wr dependency-grid`. |
 | 2. Test latent goal discovery | Collect public dependency-grid trajectories and compare latent, replay and direct execution with `wr dependency-grid-latent`. | Paired rollouts quantify candidate coverage and how much of it frozen scoring can recover. Select the confirmation protocol on development layouts before evaluating the test split. |
 | 2a. Learn to select a goal from terminal outcomes | Add `--selector-repeats 16` to fit one scorer on paired training attempts and apply it to both proposal sources. | Compare one prospective choice per case against frozen energy, nearest-layout replay, and direct tracking under matched repeats. |
+| 2b. Compose alternative routes under a budget | Run `wr budget-routes` with one terminal and several possible routes. Compare ordered pairs of proposed latent goals, original joint samples, and replay. | Keep one pool fixed across budgets to check route changes. Verify low-support paths with independent repeats and measure closed-loop suffix changes. |
 | 3. Test the effect of depth | Compare explicit intermediate goals against closed-loop terminal scoring with matched feedback and inference budgets. | The comparison reports paired terminal success and ranking quality by task depth. |
 | 4. Test the representation | Compare a reconstruction encoder and a predictive encoder trained with SIGReg under the same planner and goal interface. | Report collapse diagnostics, probes for decision-relevant state, and terminal success. |
 

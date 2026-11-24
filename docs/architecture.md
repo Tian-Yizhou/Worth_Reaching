@@ -29,6 +29,7 @@ The `src/worth_reaching/` package groups code by responsibility.
 | `tasks/pointmaze/` | Own the Maze2D task specifications, dataset and simulator adapters, controller, experiment commands and paired probes |
 | `tasks/antmaze/` | Load AntMaze archives and saved actors, train the GCBC baseline, and run latent and waypoint comparisons from matched starts |
 | `tasks/dependency_grid/` | Define switchable goals with ordered prerequisites, collect public trajectories, and evaluate declared or learned targets through paired execution |
+| `tasks/budget_routes/` | Sample latent goals, compose executable prefixes and assess rare routes under a shared learned transition scorer |
 | `planning/` | Execute decoded goals from public observation and action histories through a supplied controller |
 
 Group tasks that share simulator behavior in one family. For example, Scene and Puzzle share the OGBench reset and step implementation in `tasks/ogbench_manipulation/environment.py`. Their presets select the observation schema, goals and action limit. A new family can follow the PointMaze or AntMaze layout and register its commands from a lightweight `cli.py`, so listing commands works without installing simulator extras.
@@ -84,6 +85,8 @@ The grid flow learns the difference between a frozen prediction and an encoded d
 The dependency-grid adapter defines public geometry, position, and acquired keys. A separate experiment runner declares target cells, applies matched slip draws, and records realized arrivals, elapsed steps, and terminal success. A changed terminal goal or depth reuses the same layout, reset, and slip draws. The diagnostic uses disjoint layout IDs for train, development, and test. [Ordered-target diagnostic](experiments.md#compare-ordered-targets-in-the-dependency-grid)
 
 The learned dependency-grid runner constructs `CompletionExample` windows with a public reset and two time-indexed observation targets. It assembles the shared discrete completion model and residual flow. Target extraction uses decoded coordinates and public walls. The optional scorer is fitted on paired training-layout attempts and ranks both pools from public goal-relative features. Its choices are saved before evaluation outcomes, reference repeats, and achieved-target trajectories are collected. [Frozen latent-goal comparison](experiments.md#test-frozen-latent-goals-in-the-dependency-grid) · [Outcome-based selection](experiments.md#learn-to-select-a-goal-from-terminal-outcomes)
+
+Budgeted routes reuses the discrete completion model and residual flow. Latent samples map to public graph nodes for execution. The composer deduplicates targets by executable node and keeps the originating sample and slot. A transition model estimated from training exploration predicts budgeted terminal success using public node, inventory and risk profile. Evaluation owns the world-specific probabilities and future draws. [Budgeted route composition](experiments.md#compose-latent-goals-under-action-budgets)
 
 ## Execution feedback
 
