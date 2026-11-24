@@ -83,7 +83,7 @@ The grid flow learns the difference between a frozen prediction and an encoded d
 
 The dependency-grid adapter defines public geometry, position, and acquired keys. A separate experiment runner declares target cells, applies matched slip draws, and records realized arrivals, elapsed steps, and terminal success. A changed terminal goal or depth reuses the same layout, reset, and slip draws. The diagnostic uses disjoint layout IDs for train, development, and test. [Ordered-target diagnostic](experiments.md#compare-ordered-targets-in-the-dependency-grid)
 
-The learned dependency-grid runner constructs `CompletionExample` windows with a public reset and two time-indexed observation targets. It assembles the shared discrete completion model and residual flow. Target extraction uses decoded coordinates and public walls. Outcomes, independent reference repeats, and achieved-target trajectory collection enter after candidate declarations have been saved. [Frozen latent-goal comparison](experiments.md#test-frozen-latent-goals-in-the-dependency-grid)
+The learned dependency-grid runner constructs `CompletionExample` windows with a public reset and two time-indexed observation targets. It assembles the shared discrete completion model and residual flow. Target extraction uses decoded coordinates and public walls. The optional scorer is fitted on paired training-layout attempts and ranks both pools from public goal-relative features. Its choices are saved before evaluation outcomes, reference repeats, and achieved-target trajectories are collected. [Frozen latent-goal comparison](experiments.md#test-frozen-latent-goals-in-the-dependency-grid) · [Outcome-based selection](experiments.md#learn-to-select-a-goal-from-terminal-outcomes)
 
 ## Execution feedback
 

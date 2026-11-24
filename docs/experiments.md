@@ -72,6 +72,22 @@ The model forecasts at actions 4 and 8. At depth one the evaluator attempts the 
 
 Use `--seed` to vary training while keeping the demonstrations, evaluation starts, and repeat streams fixed. Use `--collection-seed` to generate a different demonstration archive deliberately. For a smoke check, append `--layouts 1 --repeats 2 --candidates 2 --density-samples 4 --demonstrations 1 --encoder-updates 2 --updates 2 --flow-updates 2`. After settling the protocol on development layouts, pass `--split test` to evaluate the disjoint layouts with the same train and development split.
 
+## Learn to select a goal from terminal outcomes
+
+Add `--selector-repeats 16` to the latent comparison to fit a shared scorer. The command uses the same installation and model settings.
+
+```bash
+mkdir -p results
+run_dir="$(mktemp -d results/dependency-grid-outcome.XXXXXX)"
+uv run --no-sync wr dependency-grid-latent --seed 7 --selector-repeats 16 --out "$run_dir/seed-7"
+```
+
+The generator and geometric controller are frozen during selector training. On each training layout and goal, both candidate pools share a bank of slip draws. Identical executable prefixes, including the empty prefix, are tried once per repeat. Replay proposals for a training start are drawn from other training layouts. The scorer fits a regularized binomial model to terminal success counts. It uses the same goal-relative geometry, public key locations, target coordinates, and deadlines for both sources. A successful continuation after a target miss still supplies a positive outcome.
+
+The fitted scorer ranks each evaluation pool once before rollouts, with direct tracking available in both pools. A score tie with direct tracking selects direct. `selector.npz` records the fitted weights and normalization. `selector-training-attempts.jsonl` contains the training labels and `candidate-bank.json` contains the frozen evaluation scores and choices. The summary compares `flow_outcome` and `replay_outcome` on matched evaluation repeats, reports how often each chose direct tracking, and counts selector training interactions separately. Uniform selection remains a fixed control.
+
+For a short smoke run, add `--selector-repeats 2` to the smoke settings above. The comparison evaluates one high-level choice per start with a fixed continuation. [Research plan](latent-subgoal-research.md#2-separate-discovery-selection-and-execution)
+
 ## Check a development installation
 
 From the repository root, install the CPU dependencies used by CI and run the repository checks.
