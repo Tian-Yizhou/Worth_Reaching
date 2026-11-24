@@ -12,7 +12,7 @@ from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.data.kuka import STATE_SIZE, load_clips, sample_windows, stack_goal
-from worth_reaching.data.maze_windows import CompletionContext, query_offsets
+from worth_reaching.data.trajectory_windows import CompletionContext, query_offsets
 from worth_reaching.envs.kuka import (
     ACTION_LIMIT,
     BLOCK_HEIGHT,
@@ -20,7 +20,7 @@ from worth_reaching.envs.kuka import (
     SEED_BASE,
     KukaStacking,
 )
-from worth_reaching.models.maze_completion import (
+from worth_reaching.models.continuous_completion import (
     CompletionConfig,
     LearnedCompletion,
     fit,
@@ -182,7 +182,9 @@ def run(
             scale,
             config,
             out / "checkpoints",
-            validate_resume(out, resume),
+            validate_resume(
+                out, resume, legacy_defaults={"training": {"learning_rate": 0.001}}
+            ),
         )
         metrics = model.validate(heldout, compare_xy=False)
         write_json(out / "validation.json", metrics)

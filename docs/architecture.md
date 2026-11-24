@@ -25,6 +25,10 @@ The `src/worth_reaching/` package groups code by responsibility.
 | `policies/` | Recurrent expert inference from public observations |
 | `evaluation/` | Replay, matched continuations, shared-bank comparisons and paired route scoring |
 | `cli.py` | Connect configurations to collection, window export, training and evaluation |
+| `tasks/pointmaze/` | Own the Maze2D task specifications, dataset and simulator adapters, controller, experiment commands and paired probes |
+| `planning/` | Execute decoded goals from public observation and action histories through a supplied controller |
+
+PointMaze experiment runners assemble the task adapter, completion model and controller. The model consumes public histories, goal observations, remaining action budgets and query offsets. The task loader checks the observation and action shapes against its archive schema. AntMaze, Kuka, Scene and Puzzle also use the continuous completion model in `models/continuous_completion.py` and the window types in `data/trajectory_windows.py`. Craftax and the grid diagnostic use the discrete-action predictor in `models/completion.py`.
 
 The trajectory completion model will use public data from `data/`. Its executor will consume public observations and emit primitive actions. Evaluation owns simulator snapshots and restores them for matched repeats. [Trajectory completion design](trajectory-completion.md)
 

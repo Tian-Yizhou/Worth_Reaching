@@ -9,12 +9,12 @@ import pytest
 def test_pointmaze_conditions_on_budget_without_extending_queries():
     np = pytest.importorskip("numpy")
     pytest.importorskip("torch")
-    from worth_reaching.evaluation.maze_planning import completion_context
     from worth_reaching.models.codec import ObservationCodec
-    from worth_reaching.models.maze_completion import (
+    from worth_reaching.models.continuous_completion import (
         BudgetedCompletionConfig,
         public_features,
     )
+    from worth_reaching.planning.receding_goals import completion_context
 
     config = BudgetedCompletionConfig(max_horizon=391, max_action_budget=600)
     state, goal = np.zeros(4, dtype=np.float32), np.ones(4, dtype=np.float32)
@@ -69,6 +69,12 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
 
     root = tmp_path / "run"
     selection = ["--eval-budgets", "12", "30"] if task == "medium" else []
+    if selection:
+        recipe = tmp_path / "completion.toml"
+        recipe.write_text(
+            "[model]\nwidth = 48\nlatent_size = 10\nwindows = 128\nlearning_rate = 0.002\n"
+        )
+        selection.extend(["--config", recipe])
     steps = 30 if selection else action_limit
     span = 18
     subprocess.run(
@@ -113,6 +119,10 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
     assert manifest["environment"] == environment
     assert manifest["training"]["max_horizon"] == span
     assert manifest["training"]["max_action_budget"] == action_limit
+    if selection:
+        assert manifest["training"]["width"] == 48
+        assert manifest["training"]["learning_rate"] == 0.002
+        assert manifest["training"]["windows"] == 32
     assert manifest["evaluation"]["action_limit"] == steps
     assert manifest["window_sampling"]["span_source"] == "training_episode_p90"
     for name, minimum, episodes in (("train", 8, 5), ("validation", 128, 1)):
@@ -152,7 +162,7 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
             and row["prediction_span"] == min(row["remaining_budget"], span)
             for row in map(json.loads, stream)
         )
-    assert np.asarray(plan["latent_routes"]).shape == (4, 8, 16)
+    assert np.asarray(plan["latent_routes"]).shape == (4, 8, 10 if selection else 16)
     assert np.asarray(plan["decoded_routes"]).shape == (4, 8, 4)
     assert (
         json.loads((out / "summary.json").read_text())["evaluation_environment_steps"]

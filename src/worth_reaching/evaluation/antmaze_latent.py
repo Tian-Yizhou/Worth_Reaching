@@ -23,10 +23,10 @@ from worth_reaching.evaluation.antmaze import (
     rollout,
     summarize_episodes,
 )
-from worth_reaching.evaluation.maze_planning import RecedingGoals
+from worth_reaching.models.continuous_completion import CompletionConfig, fit
 from worth_reaching.models.gcbc import load_policy
-from worth_reaching.models.maze_completion import CompletionConfig, fit
 from worth_reaching.models.training import describe, stream_seed, validate_resume
+from worth_reaching.planning.receding_goals import RecedingGoals
 
 
 def _fingerprint(path: Path) -> str:
@@ -132,7 +132,9 @@ def run(
         scale,
         config,
         out / "checkpoints",
-        validate_resume(out, resume),
+        validate_resume(
+            out, resume, legacy_defaults={"training": {"learning_rate": 0.001}}
+        ),
     )
     metrics = model.validate(eval_windows)
     (out / "weights.msgpack").write_bytes(

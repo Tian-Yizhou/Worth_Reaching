@@ -5,8 +5,11 @@ from collections.abc import Callable, Sequence
 
 import numpy as np
 
-from worth_reaching.data.maze_windows import CompletionContext, query_offsets
-from worth_reaching.models.maze_completion import CompletionConfig, LearnedCompletion
+from worth_reaching.data.trajectory_windows import CompletionContext, query_offsets
+from worth_reaching.models.continuous_completion import (
+    CompletionConfig,
+    LearnedCompletion,
+)
 from worth_reaching.models.training import stream_seed
 
 Policy = Callable[[np.ndarray, np.ndarray], np.ndarray]

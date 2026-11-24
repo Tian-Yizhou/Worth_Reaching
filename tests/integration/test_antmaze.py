@@ -254,8 +254,8 @@ def test_official_success_on_last_action_overrides_timeout():
 def test_candidate_probe_changes_only_first_attempt():
     pytest.importorskip("ogbench")
     np = pytest.importorskip("numpy")
-    from worth_reaching.evaluation.maze_planning import RecedingGoals
-    from worth_reaching.models.maze_completion import CompletionConfig
+    from worth_reaching.models.continuous_completion import CompletionConfig
+    from worth_reaching.planning.receding_goals import RecedingGoals
 
     class Completion:
         config = CompletionConfig(queries=2, candidates=2)

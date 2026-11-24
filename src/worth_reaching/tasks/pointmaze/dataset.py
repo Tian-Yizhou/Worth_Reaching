@@ -6,7 +6,7 @@ from pathlib import Path
 import minari
 import numpy as np
 
-from worth_reaching.data.maze_windows import MazeTrajectories
+from worth_reaching.data.trajectory_windows import ContinuousTrajectories
 
 OBSERVATION_SIZE = 4
 ACTION_SIZE = 2
@@ -28,7 +28,7 @@ def load_dataset(
 
 def _trajectories(
     dataset: minari.MinariDataset, episode_ids: np.ndarray
-) -> MazeTrajectories:
+) -> ContinuousTrajectories:
     observations, actions = [], []
     for episode in dataset.iterate_episodes(episode_ids):
         states = np.asarray(episode.observations["observation"], dtype=np.float32)
@@ -45,7 +45,7 @@ def _trajectories(
             )
         observations.append(states)
         actions.append(np.pad(moves, ((0, 1), (0, 0))))
-    return MazeTrajectories(
+    return ContinuousTrajectories(
         np.concatenate(observations),
         np.concatenate(actions),
         np.cumsum([len(states) for states in observations]) - 1,
@@ -54,7 +54,7 @@ def _trajectories(
 
 def split_trajectories(
     dataset: minari.MinariDataset,
-) -> tuple[MazeTrajectories, MazeTrajectories, dict]:
+) -> tuple[ContinuousTrajectories, ContinuousTrajectories, dict]:
     episode_ids = np.sort(dataset.episode_indices)
     cutoff = len(episode_ids) * 4 // 5
     if cutoff < 1 or cutoff + 1 >= len(episode_ids):

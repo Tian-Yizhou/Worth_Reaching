@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from torch import Tensor, nn
 
-from worth_reaching.data.maze_windows import CompletionContext, MaskedBatch
+from worth_reaching.data.trajectory_windows import CompletionContext, MaskedBatch
 from worth_reaching.models import flow
 from worth_reaching.models.codec import ObservationCodec, mlp, reconstruction
 from worth_reaching.models.training import (
@@ -39,6 +39,7 @@ class CompletionConfig:
     flow_updates: int = 700
     candidates: int = 4
     predictor_stopping: PredictorStopping = PredictorStopping()
+    learning_rate: float = 0.001
     max_action_budget: ClassVar[int | None] = None
 
     def __post_init__(self) -> None:
@@ -57,6 +58,8 @@ class CompletionConfig:
                 self.candidates,
             )
             < 1
+            or not np.isfinite(self.learning_rate)
+            or self.learning_rate <= 0
             or self.max_horizon <= self.queries
             or (
                 self.max_action_budget is not None
@@ -274,7 +277,7 @@ def fit(
         RandomBatches((observations,), config.batch_size, (config.seed, 601)),
         reconstruction,
         steps=config.codec_updates,
-        learning_rate=0.001,
+        learning_rate=config.learning_rate,
         out=out / "codec",
         resume=stage_resume(resume, "codec"),
     )
@@ -293,7 +296,7 @@ def fit(
         ),
         regression,
         steps=config.predictor_updates,
-        learning_rate=0.001,
+        learning_rate=config.learning_rate,
         out=out / "predictor",
         resume=stage_resume(resume, "predictor"),
         validation=(validation_features, validation_targets),
@@ -306,6 +309,7 @@ def fit(
         encoded_targets - forecast,
         seed=config.seed,
         updates=config.flow_updates,
+        learning_rate=config.learning_rate,
         out=out / "flow",
         resume=stage_resume(resume, "flow"),
     )

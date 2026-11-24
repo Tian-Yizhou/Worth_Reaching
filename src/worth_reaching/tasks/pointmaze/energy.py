@@ -9,19 +9,19 @@ import numpy as np
 import torch
 
 from worth_reaching.data.artifacts import code_revision, write_json
-from worth_reaching.data.pointmaze import ACTION_SIZE, load_dataset
-from worth_reaching.envs.pointmaze import SEED_BASE, PointMaze
-from worth_reaching.envs.pointmaze_tasks import TASKS
-from worth_reaching.evaluation.maze_planning import completion_context
-from worth_reaching.evaluation.pointmaze import (
+from worth_reaching.models.latent_energy import prefix_energy
+from worth_reaching.models.training import stream_seed
+from worth_reaching.planning.receding_goals import completion_context
+from worth_reaching.tasks.pointmaze.dataset import ACTION_SIZE, load_dataset
+from worth_reaching.tasks.pointmaze.environment import SEED_BASE, PointMaze
+from worth_reaching.tasks.pointmaze.experiment import (
     ALIGNED_SCHEMA,
     BUDGET_SCHEMA,
     rollout,
     track,
 )
-from worth_reaching.evaluation.pointmaze_probe import FrozenRun
-from worth_reaching.models.latent_energy import prefix_energy
-from worth_reaching.models.training import stream_seed
+from worth_reaching.tasks.pointmaze.probe import FrozenRun
+from worth_reaching.tasks.pointmaze.spec import TASKS
 
 
 def _declare(

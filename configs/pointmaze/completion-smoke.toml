@@ -1,0 +1,9 @@
+[model]
+width = 32
+latent_size = 8
+windows = 64
+batch_size = 16
+codec_updates = 2
+predictor_updates = 2
+flow_updates = 2
+learning_rate = 0.001

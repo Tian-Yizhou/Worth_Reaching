@@ -5,7 +5,7 @@ from typing import NamedTuple
 import gymnasium as gym
 import numpy as np
 
-from worth_reaching.envs.pointmaze_tasks import PointMazeTask
+from worth_reaching.tasks.pointmaze.spec import PointMazeTask
 
 SEED_BASE = {"dev": 29001, "test": 69001}
 
