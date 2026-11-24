@@ -178,6 +178,7 @@ def _scene_reachability(args: argparse.Namespace) -> dict[str, object]:
         budgets=args.budgets,
         cases_per_group=args.cases_per_group,
         replay_from=args.replay_from,
+        waypoints=args.waypoints,
     )
 
 
@@ -375,6 +376,9 @@ def main() -> None:
         "--budgets", nargs="+", type=int, default=[16, 32, 64, 128]
     )
     reachability.add_argument("--cases-per-group", type=int, default=6)
+    reachability.add_argument(
+        "--waypoints", choices=("mixed", "drawer-insertion"), default="mixed"
+    )
     reachability.add_argument(
         "--replay-from",
         type=Path,

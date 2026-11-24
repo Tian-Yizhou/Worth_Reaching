@@ -5,6 +5,46 @@ import subprocess
 import pytest
 
 
+def test_drawer_waypoints_require_a_stable_placement_within_one_episode():
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("ogbench")
+    pytest.importorskip("torch")
+    pytest.importorskip("flax")
+    from worth_reaching.data.ogbench import StateArchive
+    from worth_reaching.evaluation.scene_reachability import (
+        _arrival,
+        _drawer_placed,
+        _drawer_waypoints,
+    )
+
+    observations = np.zeros((130, 40), dtype=np.float32)
+    observations[:, 36] = -0.16 * 18
+    observations[:, 19:22] = [-0.75, 0.5, 0.2]
+    put_in_drawer = [-0.95, -2.4, 0.66]
+    observations[30:34, 19:22] = put_in_drawer
+    observations[70:75, 19:22] = put_in_drawer
+    observations[97:103, 19:22] = put_in_drawer
+    observations[110:115, 19:22] = put_in_drawer
+    archive = StateArchive(
+        observations,
+        np.zeros((130, 5), dtype=np.float32),
+        np.array([99, 129]),
+        np.flatnonzero(~np.isin(np.arange(130), [99, 129])),
+        "fixture",
+    )
+    assert list(_drawer_waypoints(archive, [64], 20, 803)) == [
+        ("drawer_insertion", 64, 0, 10)
+    ]
+    assert _arrival(observations[:74], observations[74], _drawer_placed, 5) == (
+        None,
+        False,
+    )
+    assert _arrival(observations[:75], observations[74], _drawer_placed, 5) == (
+        74,
+        True,
+    )
+
+
 def test_scene_restores_goal_physics_and_next_observation():
     np = pytest.importorskip("numpy")
     pytest.importorskip("ogbench")
@@ -195,7 +235,10 @@ def test_manipulation_cli_trains_and_reuses_start_and_controller(
                 np.testing.assert_array_equal(parallel[key], serial[key])
 
 
-def test_scene_reachability_cli_pairs_recorded_actions_with_frozen_actor(tmp_path):
+@pytest.mark.parametrize("singular_cube", [False, True])
+def test_scene_reachability_cli_pairs_recorded_actions_with_frozen_actor(
+    tmp_path, singular_cube
+):
     np = pytest.importorskip("numpy")
     torch = pytest.importorskip("torch")
     pytest.importorskip("ogbench")
@@ -209,6 +252,12 @@ def test_scene_reachability_cli_pairs_recorded_actions_with_frozen_actor(tmp_pat
     env = SceneEnv(env_type="scene", mode="data_collection", terminate_at_goal=False)
     try:
         observation, info = env.reset(seed=17)
+        if singular_cube:
+            pose = env.data.qpos.copy()
+            cube_quat = int(env.model.joint("object_joint_0").qposadr[0]) + 3
+            pose[cube_quat : cube_quat + 4] = np.sqrt(0.5) * np.array([1, 0, 1, 0])
+            env.set_state(pose, env.data.qvel.copy(), info["button_states"])
+            observation = env.compute_observation()
         action = np.array([0.4, 0, 0, 0, 0], dtype=np.float32)
         observations, qpos, qvel, buttons = [], [], [], []
         for step in range(17):
@@ -220,6 +269,9 @@ def test_scene_reachability_cli_pairs_recorded_actions_with_frozen_actor(tmp_pat
                 observation, _, _, _, info = env.step(action)
     finally:
         env.close()
+    if singular_cube:
+        # The cube quaternion matches the reset while its undefined yaw is archived differently.
+        observations[0][26:28] *= -1
     np.savez(
         tmp_path / "scene-play-v0-val.npz",
         observations=np.asarray(observations, dtype=np.float32),
@@ -285,6 +337,9 @@ def test_scene_reachability_cli_pairs_recorded_actions_with_frozen_actor(tmp_pat
     assert case["target_row"] - case["start_row"] == 16
     assert case["replay_matches_at_offset"]
     assert case["actor_arrival"] is None
+    assert case["initial_cube_yaw_singular"] is singular_cube
+    if singular_cube:
+        assert case["initial_cube_yaw_error"] > 1
     with np.load(out / "trajectories.npz", allow_pickle=False) as paths:
         np.testing.assert_array_equal(
             paths["0_actor_observations"][0], paths["0_replay_observations"][0]
