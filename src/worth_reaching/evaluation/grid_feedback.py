@@ -12,7 +12,6 @@ from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.data.completion import CompletionInput
-from worth_reaching.envs import grid_routes as grid
 from worth_reaching.evaluation import grid_execution as execution
 from worth_reaching.evaluation.attempt_selection import fit_attempt_heads
 from worth_reaching.models import flow
@@ -24,6 +23,7 @@ from worth_reaching.models.training import (
     validate_resume,
     weights,
 )
+from worth_reaching.tasks.grid_routes import environment as grid
 
 ARRIVAL_FLOOR = 0.25
 SLIP = 0.15

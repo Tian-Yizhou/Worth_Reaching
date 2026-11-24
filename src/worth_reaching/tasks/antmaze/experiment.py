@@ -9,24 +9,24 @@ from pathlib import Path
 import numpy as np
 from flax import serialization
 
-from worth_reaching.data.antmaze import (
-    ACTION_SIZE,
-    DATASETS,
-    load_antmaze_archive,
-)
 from worth_reaching.data.artifacts import code_revision, write_json
-from worth_reaching.envs import antmaze
-from worth_reaching.evaluation.antmaze import (
+from worth_reaching.models.continuous_completion import CompletionConfig, fit
+from worth_reaching.models.training import describe, stream_seed, validate_resume
+from worth_reaching.planning.receding_goals import RecedingGoals
+from worth_reaching.tasks.antmaze import environment as antmaze
+from worth_reaching.tasks.antmaze.baseline import (
     EvalConfig,
     evaluation_starts,
     paired_metrics,
     rollout,
     summarize_episodes,
 )
-from worth_reaching.models.continuous_completion import CompletionConfig, fit
-from worth_reaching.models.gcbc import load_policy
-from worth_reaching.models.training import describe, stream_seed, validate_resume
-from worth_reaching.planning.receding_goals import RecedingGoals
+from worth_reaching.tasks.antmaze.checkpoint import load_policy
+from worth_reaching.tasks.antmaze.dataset import (
+    ACTION_SIZE,
+    DATASETS,
+    load_antmaze_archive,
+)
 
 
 def _fingerprint(path: Path) -> str:

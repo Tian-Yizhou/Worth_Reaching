@@ -8,7 +8,8 @@ import pytest
 def test_grid_evaluation_uses_matched_public_starts_and_masks():
     np = pytest.importorskip("numpy")
     pytest.importorskip("flax")
-    from worth_reaching.envs.grid_routes import (
+    from worth_reaching.evaluation.completion import score_paired_routes
+    from worth_reaching.tasks.grid_routes.environment import (
         BUDGET,
         GOALS,
         LAYOUT_COUNTS,
@@ -16,7 +17,6 @@ def test_grid_evaluation_uses_matched_public_starts_and_masks():
         grid_demonstrations,
         layout_id,
     )
-    from worth_reaching.evaluation.completion import score_paired_routes
 
     datasets = grid_demonstrations(include_test=True)
     world_ids = [{example.world_id for example in rows} for rows in datasets.values()]
@@ -79,7 +79,6 @@ def test_training_cli_saves_public_input_predictors(tmp_path):
     pytest.importorskip("flax")
     from flax import serialization
 
-    from worth_reaching.envs.grid_routes import grid_demonstrations
     from worth_reaching.models.completion import (
         LatentPredictor,
         ModelSpec,
@@ -89,6 +88,7 @@ def test_training_cli_saves_public_input_predictors(tmp_path):
         predict,
     )
     from worth_reaching.models.training import restore_weights
+    from worth_reaching.tasks.grid_routes.environment import grid_demonstrations
 
     out = tmp_path / "model"
     result = subprocess.run(
@@ -285,9 +285,9 @@ def test_rollout_retains_terminal_success_after_waypoint_miss():
     np = pytest.importorskip("numpy")
     pytest.importorskip("flax")
     from worth_reaching.data.completion import CompletionInput
-    from worth_reaching.envs import grid_routes as grid
     from worth_reaching.evaluation.grid_execution import Waypoint, rollout
     from worth_reaching.evaluation.grid_feedback import _optimal_policy
+    from worth_reaching.tasks.grid_routes import environment as grid
 
     start, markers = (2, 2), ((5, 0), (5, 6))
     observation = grid.grid_observation(start, (1, 5), markers)

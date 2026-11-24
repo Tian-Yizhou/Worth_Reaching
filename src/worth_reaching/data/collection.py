@@ -22,7 +22,7 @@ from worth_reaching.data.craftax_trajectories import (
     episode_keys,
     episode_spec,
 )
-from worth_reaching.envs.craftax import (
+from worth_reaching.tasks.craftax.environment import (
     ACTION_NAMES,
     OBSERVATION_SCHEMA,
     SURVIVAL_TASK,

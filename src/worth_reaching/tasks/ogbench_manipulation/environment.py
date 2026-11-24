@@ -10,7 +10,7 @@ import ogbench  # noqa: F401 - registers OGBench Gymnasium environments
 from ogbench.manipspace.envs.puzzle_env import PuzzleEnv
 from ogbench.manipspace.envs.scene_env import SceneEnv
 
-from worth_reaching.envs.ogbench_tasks import ManipulationTask
+from worth_reaching.tasks.ogbench_manipulation.spec import ManipulationTask
 
 STATE_SPEC = mujoco.mjtState.mjSTATE_INTEGRATION.value
 

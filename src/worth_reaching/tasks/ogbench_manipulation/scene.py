@@ -1,7 +1,7 @@
 """Default state-based OGBench Scene environment."""
 
-from worth_reaching.envs.ogbench_manipulation import Manipulation
-from worth_reaching.envs.ogbench_tasks import SCENE
+from worth_reaching.tasks.ogbench_manipulation.environment import Manipulation
+from worth_reaching.tasks.ogbench_manipulation.spec import SCENE
 
 
 class Scene(Manipulation):

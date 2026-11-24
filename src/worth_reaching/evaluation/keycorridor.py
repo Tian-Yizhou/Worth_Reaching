@@ -9,14 +9,14 @@ from pathlib import Path
 
 from worth_reaching.contracts import Action
 from worth_reaching.data.artifacts import code_revision, write_json
-from worth_reaching.envs.minigrid import (
+from worth_reaching.evaluation.branches import Attempt, evaluate_action, replay_prefix
+from worth_reaching.tasks.keycorridor.environment import (
     CONTINUATION_ID,
     ENVIRONMENT_ID,
     TASK,
     KeyCorridorEpisode,
     continue_toward_ball,
 )
-from worth_reaching.evaluation.branches import Attempt, evaluate_action, replay_prefix
 
 
 @dataclass(frozen=True, slots=True)

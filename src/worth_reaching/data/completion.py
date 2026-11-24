@@ -125,7 +125,7 @@ class CompletionCorpus:
 
 
 def load_completion_corpus(directory: Path) -> CompletionCorpus:
-    from worth_reaching.envs.craftax import SURVIVAL_TASK
+    from worth_reaching.tasks.craftax.environment import SURVIVAL_TASK
 
     if not (directory / "summary.json").is_file():
         raise ValueError(
@@ -169,7 +169,7 @@ def prepare_craftax_windows(
         SPLIT_VERSION,
         load_craftax_archive,
     )
-    from worth_reaching.envs.craftax import ACTION_NAMES, SURVIVAL_TASK
+    from worth_reaching.tasks.craftax.environment import ACTION_NAMES, SURVIVAL_TASK
 
     archive = load_craftax_archive(source)
     if archive.task != SURVIVAL_TASK:

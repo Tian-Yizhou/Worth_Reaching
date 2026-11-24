@@ -7,9 +7,12 @@ from pathlib import Path
 from minigrid.core.world_object import Ball
 
 from worth_reaching.contracts import Action, PolicyInput
-from worth_reaching.envs.minigrid import KeyCorridorEpisode, continue_toward_ball
 from worth_reaching.evaluation.branches import evaluate_action, replay_prefix
 from worth_reaching.evaluation.keycorridor import PilotConfig
+from worth_reaching.tasks.keycorridor.environment import (
+    KeyCorridorEpisode,
+    continue_toward_ball,
+)
 
 CONFIG = Path(__file__).resolve().parents[2] / "configs/minigrid/keycorridor.toml"
 

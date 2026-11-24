@@ -64,7 +64,7 @@ def test_craftax_branch_replay_and_terminal_labels():
     import numpy as np
     from craftax.craftax_classic.constants import Action, BlockType
 
-    from worth_reaching.envs.craftax import CraftaxClassic
+    from worth_reaching.tasks.craftax.environment import CraftaxClassic
 
     env = CraftaxClassic(budget=2)
     ordinary = env.reset(jax.random.key(0))
@@ -116,8 +116,8 @@ def test_replay_natural_iron_pickaxe_trajectory():
     from craftax.craftax_classic.constants import Action
 
     from worth_reaching.data.craftax_trajectories import episode_spec
-    from worth_reaching.envs.craftax import CraftaxClassic
     from worth_reaching.evaluation.craftax import replay_prefix, run_attempt
+    from worth_reaching.tasks.craftax.environment import CraftaxClassic
 
     fixture = CONFIG.parents[2] / "tests/fixtures/craftax_iron_pickaxe.json"
     trace = json.loads(fixture.read_text(encoding="utf-8"))
@@ -191,7 +191,7 @@ def test_craft_and_survive_is_scored_at_deadline_and_death_overrides_crafting():
     import jax
     from craftax.craftax_classic.constants import Action, BlockType
 
-    from worth_reaching.envs.craftax import SURVIVAL_TASK, CraftaxClassic
+    from worth_reaching.tasks.craftax.environment import SURVIVAL_TASK, CraftaxClassic
 
     env = CraftaxClassic(budget=2, task=SURVIVAL_TASK)
     start = env.reset(jax.random.key(0)).snapshot()

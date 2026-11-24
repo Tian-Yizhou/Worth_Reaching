@@ -11,7 +11,7 @@ from typing import Literal
 
 import jax
 
-from worth_reaching.envs.craftax import (
+from worth_reaching.tasks.craftax.environment import (
     OBSERVATION_SCHEMA,
     RULES_VERSION,
     TASK,
