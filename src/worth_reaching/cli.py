@@ -165,6 +165,20 @@ def _manipulation_latent(args: argparse.Namespace) -> dict[str, object]:
     )
 
 
+def _scene_reachability(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.scene_reachability import run
+
+    return run(
+        args.checkpoint,
+        args.data_dir / f"{SCENE.dataset}-val.npz",
+        args.out,
+        seed=args.seed,
+        offsets=args.offsets,
+        budgets=args.budgets,
+        cases_per_group=args.cases_per_group,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="wr")
     parser.add_argument(
@@ -316,6 +330,23 @@ def main() -> None:
             help="Action limit (defaults to the official task limit)",
         )
         command.set_defaults(run=_manipulation_latent, extra="ogbench")
+    reachability = commands.add_parser(
+        "scene-reachability", help="Probe a frozen Scene controller on achieved goals"
+    )
+    reachability.add_argument(
+        "--checkpoint", type=Path, required=True, help="Directory from scene-latent"
+    )
+    reachability.add_argument(
+        "--data-dir", type=Path, default=Path("results/datasets/ogbench")
+    )
+    reachability.add_argument("--out", type=Path, required=True)
+    reachability.add_argument("--seed", type=int, default=803)
+    reachability.add_argument("--offsets", nargs="+", type=int, default=[16, 32, 64])
+    reachability.add_argument(
+        "--budgets", nargs="+", type=int, default=[16, 32, 64, 128]
+    )
+    reachability.add_argument("--cases-per-group", type=int, default=6)
+    reachability.set_defaults(run=_scene_reachability, extra="ogbench")
     comparison = commands.add_parser(
         "attempt-compare", help="Fit and compare shared-bank selectors"
     )

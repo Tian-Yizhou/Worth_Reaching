@@ -480,6 +480,20 @@ Executor training alternates hindsight-goal batches capped at 64 transitions and
 
 The manifest identifies the official train and validation archives by checksum. Offline validation reports action MSE and normalized reconstruction and prediction MSE. The other artifacts contain exact starts, public trajectories with executed actions, sampled plans, weights and paired success by task.
 
+### Test Scene waypoint reachability
+
+Pass an existing `scene-latent` run directory to evaluate its frozen controller. The command uses `scene-play-v0-val.npz` and steps MuJoCo on the host. [Scene setup](#run-state-based-ogbench-scene)
+
+```bash
+run_dir="$(mktemp -d results/scene-reachability.XXXXXX)"
+uv run --no-sync wr scene-reachability --checkpoint results/path-to-scene-run \
+  --out "$run_dir/probe" --offsets 16 32 64 --budgets 16 32 64 128
+```
+
+For each demonstration offset, the evaluator samples one nontrivial waypoint per selected validation episode in each group. `scene_change` requires a change to the cube, drawer, window or locks. `pose_only` requires moving the end effector while the scene already matches. Arrival requires the cube and end-effector positions and both slides to be within 4 cm of their respective targets, with both lock states matching exactly. The controller receives the live public observation and the recorded public target.
+
+Both arms restore the same archived start. The evaluator uses the private physics and lock arrays for restoration and reports whether the recorded actions reproduce the target at the recorded offset. The archive lacks MuJoCo's contact-force cache, so the evaluator reports the initial contact discrepancy and checks the remaining public features against the archive. The controller runs up to the largest budget. Its first arrival supplies the outcome at every smaller budget, including on the last permitted action. `summary.json` gives counts for all cases and for the subset the replay reproduces. The full public trajectories and per-case outcomes allow further inspection. This development diagnostic uses play-archive states and measures local arrival. Official Task 4 and 5 resets and terminal success are evaluated with `scene-latent`.
+
 ## Run state-based OGBench Puzzle
 
 The robot presses buttons to match the full goal pattern. The evaluator uses OGBench's five official goal configurations and scores the native success event. The board selects the official dataset, observation width and action budget. [OGBench Puzzle](https://seohong.me/projects/ogbench/#puzzle) · [Official task and dataset specifications](https://arxiv.org/html/2410.20092#A5.SS1)

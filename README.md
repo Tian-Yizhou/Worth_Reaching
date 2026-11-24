@@ -51,7 +51,7 @@ Choose an experiment below for its data preparation and run commands.
 | [Maze2D / PointMaze](docs/experiments.md#run-the-diffuser-maze2d-pilots) | Compare direct and latent plans in U-Maze, Medium and Large, and probe first-target selection on Medium. |
 | [OGBench AntMaze](docs/experiments.md#train-the-antmaze-gcbc-baseline) | Train a goal-conditioned actor and reuse it to compare direct execution, waypoint following and learned plans. |
 | [Kuka stacking](docs/experiments.md#run-conditional-kuka-stacking) | Condition a plan on a requested four-block order and score the resulting tower in the Diffuser simulator. |
-| [OGBench Scene](docs/experiments.md#run-state-based-ogbench-scene) and [Puzzle](docs/experiments.md#run-state-based-ogbench-puzzle) | Evaluate manipulation plans on the official state-based goals with a shared executor per task. |
+| [OGBench Scene](docs/experiments.md#run-state-based-ogbench-scene) and [Puzzle](docs/experiments.md#run-state-based-ogbench-puzzle) | Evaluate manipulation plans on the official state-based goals and [probe Scene waypoint reachability](docs/experiments.md#test-scene-waypoint-reachability). |
 
 ## Architecture
 
