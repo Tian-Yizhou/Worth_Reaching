@@ -29,9 +29,20 @@ class RegionConfig:
     interpolations: int = 16
     sampling_steps: int = 16
     learning_rate: float = 0.001
+    width: int = 128
+    batch_size: int = 64
 
     def __post_init__(self) -> None:
-        if min(self.updates, self.interpolations, self.sampling_steps) < 1:
+        if (
+            min(
+                self.updates,
+                self.interpolations,
+                self.sampling_steps,
+                self.width,
+                self.batch_size,
+            )
+            < 1
+        ):
             raise ValueError("Region decoder counts must be positive")
 
 
@@ -78,6 +89,8 @@ class RegionDecoder:
             updates=config.updates,
             out=out,
             learning_rate=config.learning_rate,
+            width=config.width,
+            batch_size=config.batch_size,
         )
         return cls(model, scale, config.sampling_steps)
 
@@ -120,16 +133,21 @@ class RegionDecoder:
 
 
 def gaussian_support(state: np.ndarray, samples: np.ndarray, floor: float) -> float:
-    """Support under a diagonal Gaussian matched to the region samples, at most one."""
+    """Log support under a diagonal Gaussian matched to the region samples, at most 0.
+
+    Supports are compared with quantile-calibrated thresholds, so the log scale only
+    avoids underflow in high-dimensional observations.
+    """
     center = samples.mean(axis=0)
     scale = np.maximum(samples.std(axis=0), floor)
-    return float(np.exp(-0.5 * np.sum(np.square((state - center) / scale))))
+    return float(-0.5 * np.sum(np.square((state - center) / scale)))
 
 
 def kernel_support(state: np.ndarray, samples: np.ndarray, bandwidth: float) -> float:
-    """Gaussian-kernel density of state under region samples, scaled to at most one."""
-    distances = np.sum(np.square(samples - state), axis=-1)
-    return float(np.mean(np.exp(-0.5 * distances / bandwidth**2)))
+    """Log Gaussian-kernel density of state under region samples, at most 0."""
+    exponents = -0.5 * np.sum(np.square(samples - state), axis=-1) / bandwidth**2
+    peak = exponents.max()
+    return float(peak + np.log(np.mean(np.exp(exponents - peak))))
 
 
 @torch.no_grad()

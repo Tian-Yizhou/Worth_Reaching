@@ -37,11 +37,12 @@ def test_arrival_rules_follow_encoding_distance_and_region_support():
     )
     consistency = EncoderConsistency(lambda observation: observation, epsilon=0.2)
     assert consistency(near, goal) and not consistency(far, goal)
-    support = RegionSupport(bandwidth=0.1, threshold=0.5)
+    # Supports are log densities, so thresholds are logs of the old linear values.
+    support = RegionSupport(bandwidth=0.1, threshold=np.log(0.5))
     assert support(near, goal) and not support(far, goal)
-    assert not RegionSupport(bandwidth=0.1, threshold=0.9)(near, goal)
+    assert not RegionSupport(bandwidth=0.1, threshold=np.log(0.9))(near, goal)
     tight = LatentGoal(np.zeros(2), samples=np.array([[0.0, 0.0], [0.0, 0.1]]))
-    gaussian = GaussianSupport(floor=0.1, threshold=0.5)
+    gaussian = GaussianSupport(floor=0.1, threshold=np.log(0.5))
     assert gaussian(near, tight) and not gaussian(far, tight)
     with pytest.raises(ValueError, match="decoder samples"):
         support(near, LatentGoal(np.zeros(2)))
