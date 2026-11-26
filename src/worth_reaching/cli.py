@@ -16,16 +16,13 @@ from worth_reaching.tasks.ogbench_manipulation.spec import SCENE, TASKS
 from worth_reaching.tasks.pointmaze.cli import register_commands as register_pointmaze
 
 EXPERIMENT_MODULES = {
-    "flax",
     "gymnasium",
     "gymnasium_robotics",
     "h5py",
-    "jax",
     "minari",
     "mujoco",
     "numpy",
     "ogbench",
-    "optax",
 }
 
 
@@ -199,7 +196,7 @@ def main() -> None:
         comparison.add_argument(f"--{split}", type=Path, required=True)
     comparison.add_argument("--out", type=Path, required=True)
     comparison.add_argument("--seed", type=int, default=43301)
-    comparison.set_defaults(run=_attempt_compare, extra="grid")
+    comparison.set_defaults(run=_attempt_compare, extra="training")
     for command in (pointmaze, scene):
         command.add_argument(
             "--resume", type=Path, help="Continue from a compatible Lightning run"

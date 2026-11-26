@@ -22,7 +22,6 @@ def test_latent_prefix_handoff_and_terminal_labels(miss_first):
     np = pytest.importorskip("numpy")
     pytest.importorskip("gymnasium")
     pytest.importorskip("torch")
-    pytest.importorskip("flax")
     pytest.importorskip("minari")
     from worth_reaching.tasks.pointmaze.energy import attempt_prefix
     from worth_reaching.tasks.pointmaze.environment import Step

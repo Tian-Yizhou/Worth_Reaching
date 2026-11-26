@@ -45,12 +45,3 @@ class ObservationCodec(nn.Module):
 def reconstruction(model, batch):
     (observations,) = batch
     return ((model(observations) - observations, None),)
-
-
-def legacy_dense(params: dict, prefix: str, *layer_names: str) -> dict:
-    values = {}
-    for index, name in enumerate(layer_names):
-        layer = params[name]
-        values[f"{prefix}.{2 * index}.weight"] = layer["kernel"].T
-        values[f"{prefix}.{2 * index}.bias"] = layer["bias"]
-    return values

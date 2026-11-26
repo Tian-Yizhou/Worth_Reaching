@@ -9,7 +9,6 @@ def test_drawer_waypoints_require_a_stable_placement_within_one_episode():
     np = pytest.importorskip("numpy")
     pytest.importorskip("ogbench")
     pytest.importorskip("torch")
-    pytest.importorskip("flax")
     from worth_reaching.data.ogbench import StateArchive
     from worth_reaching.evaluation.scene_reachability import (
         _arrival,
@@ -91,7 +90,7 @@ def test_manipulation_cli_trains_and_reuses_start_and_controller(
 ):
     np = pytest.importorskip("numpy")
     pytest.importorskip("ogbench")
-    pytest.importorskip("jax")
+    pytest.importorskip("torch")
     for suffix, seed in (("", 5), ("-val", 6)):
         rng = np.random.default_rng(seed)
         terminals = np.arange(30) % 15 == 14
@@ -205,12 +204,10 @@ def test_scene_reachability_cli_pairs_recorded_actions_with_frozen_actor(
     np = pytest.importorskip("numpy")
     torch = pytest.importorskip("torch")
     pytest.importorskip("ogbench")
-    pytest.importorskip("flax")
-    from flax.serialization import to_bytes
     from ogbench.manipspace.envs.scene_env import SceneEnv
 
     from worth_reaching.models.gcbc import GCBC
-    from worth_reaching.models.training import weights
+    from worth_reaching.models.training import save_weights, weights
 
     env = SceneEnv(env_type="scene", mode="data_collection", terminate_at_goal=False)
     try:
@@ -260,14 +257,13 @@ def test_scene_reachability_cli_pairs_recorded_actions_with_frozen_actor(
     with torch.no_grad():
         for parameter in model.parameters():
             parameter.zero_()
-    (checkpoint / "weights.msgpack").write_bytes(
-        to_bytes(
-            {
-                "executor": weights(model),
-                "mean": np.zeros(40, dtype=np.float32),
-                "scale": np.ones(40, dtype=np.float32),
-            }
-        )
+    save_weights(
+        checkpoint / "weights.pt",
+        {
+            "executor": weights(model),
+            "mean": np.zeros(40, dtype=np.float32),
+            "scale": np.ones(40, dtype=np.float32),
+        },
     )
     out = tmp_path / "probe"
     subprocess.run(

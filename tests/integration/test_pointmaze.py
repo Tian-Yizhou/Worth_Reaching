@@ -108,8 +108,8 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
         sweep = json.loads((root / "summary.json").read_text())
         assert set(sweep["budgets"]) == {"12", "30"}
         assert sweep["evaluation_environment_steps"] == 4 * (12 + 30)
-        assert (root / "budget-12/weights.msgpack").samefile(root / "weights.msgpack")
-        assert (out / "weights.msgpack").samefile(root / "weights.msgpack")
+        assert (root / "budget-12/weights.pt").samefile(root / "weights.pt")
+        assert (out / "weights.pt").samefile(root / "weights.pt")
         with gzip.open(root / "budget-12/plans.jsonl.gz", "rt") as stream:
             shorter = json.loads(next(stream))
         assert shorter["remaining_budget"] == shorter["prediction_span"] == 12

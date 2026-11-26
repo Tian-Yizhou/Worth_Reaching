@@ -9,7 +9,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.models.continuous_completion import (
@@ -18,7 +17,12 @@ from worth_reaching.models.continuous_completion import (
     LearnedCompletion,
 )
 from worth_reaching.models.latent_energy import prefix_energy
-from worth_reaching.models.training import PredictorStopping, stream_seed
+from worth_reaching.models.training import (
+    WEIGHTS_FILE,
+    PredictorStopping,
+    load_weights,
+    stream_seed,
+)
 from worth_reaching.planning.receding_goals import completion_context
 from worth_reaching.tasks.pointmaze.dataset import ACTION_SIZE, load_dataset
 from worth_reaching.tasks.pointmaze.environment import SEED_BASE, PointMaze
@@ -61,10 +65,9 @@ class FrozenRun:
             else CompletionConfig
         )
         config = config_type(**settings)
-        raw = (directory / "weights.msgpack").read_bytes()
-        model = LearnedCompletion.from_weights(
-            config, serialization.msgpack_restore(raw)
-        )
+        path = directory / WEIGHTS_FILE
+        model = LearnedCompletion.from_weights(config, load_weights(path))
+        raw = path.read_bytes()
         episodes = json.loads((directory / "episodes.json").read_text())
         return cls(directory, manifest, model, sha256(raw).hexdigest(), episodes)
 

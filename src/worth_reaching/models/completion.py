@@ -1,6 +1,5 @@
 """Learn latent predictions from public histories and masked observations."""
 
-import json
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -9,29 +8,23 @@ from typing import NamedTuple
 
 import numpy as np
 import torch
-from flax import serialization
 from torch import nn
 from torch.nn import functional as F
 
 from worth_reaching.data.completion import CompletionExample, CompletionInput
 from worth_reaching.models.codec import (
     ObservationCodec,
-    legacy_dense,
     mlp,
     reconstruction,
 )
 from worth_reaching.models.training import (
     PredictorStopping,
     RandomBatches,
-    restore_weights,
     stage_resume,
     stream_seed,
     tensor,
     train_stage,
 )
-
-CHECKPOINT_SCHEMA = "latent_completion_v2"
-LEGACY_SCHEMA = "latent_completion_v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,27 +259,6 @@ def fit(
     return codec, *predictors
 
 
-def _legacy_predictor(params: dict) -> dict:
-    gru = params["GRUCell_0"]
-    values = legacy_dense(params, "net", "Dense_0", "Dense_1", "Dense_2")
-    zeros = np.zeros_like(gru["hn"]["bias"])
-    values.update(
-        {
-            "history.weight_ih_l0": np.concatenate(
-                [gru[f"i{gate}"]["kernel"].T for gate in "rzn"]
-            ),
-            "history.weight_hh_l0": np.concatenate(
-                [gru[f"h{gate}"]["kernel"].T for gate in "rzn"]
-            ),
-            "history.bias_ih_l0": np.concatenate(
-                [gru[f"i{gate}"]["bias"] for gate in "rzn"]
-            ),
-            "history.bias_hh_l0": np.concatenate([zeros, zeros, gru["hn"]["bias"]]),
-        }
-    )
-    return values
-
-
 @dataclass(frozen=True, slots=True)
 class FrozenCompletion:
     spec: ModelSpec
@@ -294,42 +266,6 @@ class FrozenCompletion:
     source: dict
     codec: ObservationCodec
     predictor: LatentPredictor
-
-    @classmethod
-    def load(cls, directory: Path) -> "FrozenCompletion":
-        manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
-        if manifest.get("schema") not in (CHECKPOINT_SCHEMA, LEGACY_SCHEMA):
-            raise ValueError("Expected a latent completion checkpoint")
-        spec = ModelSpec(
-            **{**manifest["model"], "goals": tuple(manifest["model"]["goals"])}
-        )
-        settings = manifest["config"]
-        if "predictor_stopping" in settings:
-            settings["predictor_stopping"] = PredictorStopping(
-                **settings["predictor_stopping"]
-            )
-        config = TrainingConfig(**settings)
-        values = serialization.msgpack_restore(
-            (directory / "weights.msgpack").read_bytes()
-        )
-        codec_weights = values["codec"]
-        predictor_weights = values["conditioned"]
-        if manifest["schema"] == LEGACY_SCHEMA:
-            codec_weights = {
-                name: value
-                for section, params in codec_weights["params"].items()
-                for name, value in legacy_dense(
-                    params, section, "layers_0", "layers_2"
-                ).items()
-            }
-            predictor_weights = _legacy_predictor(predictor_weights["params"])
-        codec = ObservationCodec(
-            config.width, config.latent_size, spec.observation_size
-        )
-        predictor = LatentPredictor(spec, config.width, config.latent_size)
-        restore_weights(codec, codec_weights)
-        restore_weights(predictor, predictor_weights)
-        return cls(spec, config, manifest["source"], codec, predictor)
 
     @torch.no_grad()
     def forecast(self, inputs: PackedInput):

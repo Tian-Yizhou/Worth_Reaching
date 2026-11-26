@@ -10,6 +10,7 @@ import numpy as np
 
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.models.completion import TrainingConfig
+from worth_reaching.models.training import WEIGHTS_FILE
 from worth_reaching.tasks.budget_routes import data, planner
 from worth_reaching.tasks.budget_routes import environment as env
 
@@ -451,9 +452,7 @@ def run(
             "min_reliability": RELIABLE,
             "min_gain": MINIMUM_GAIN,
             "candidate_bank_sha256": sha256(bank.read_bytes()).hexdigest(),
-            "weights_sha256": sha256(
-                (out / "weights.msgpack").read_bytes()
-            ).hexdigest(),
+            "weights_sha256": sha256((out / WEIGHTS_FILE).read_bytes()).hexdigest(),
         },
     )
     layouts_by_id = {world.id: world for world in worlds}

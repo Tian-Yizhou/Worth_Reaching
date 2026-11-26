@@ -7,13 +7,16 @@ from importlib.metadata import version
 from pathlib import Path
 
 import numpy as np
-from flax.serialization import msgpack_restore
 from ogbench.manipspace.envs.scene_env import SceneEnv
 
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.data.ogbench import StateArchive, load_state_archive
 from worth_reaching.models.gcbc import GCBC, policy_from_model
-from worth_reaching.models.training import restore_weights
+from worth_reaching.models.training import (
+    WEIGHTS_FILE,
+    load_weights,
+    restore_weights,
+)
 from worth_reaching.planning.receding_goals import Policy
 from worth_reaching.tasks.ogbench_manipulation.spec import ACTION_SIZE, SCENE
 
@@ -330,8 +333,8 @@ def run(
     )
     if archive.fingerprint == manifest["train_sha256"]:
         raise ValueError("Use an archive held out from controller training")
-    packed = (checkpoint / "weights.msgpack").read_bytes()
-    weights = msgpack_restore(packed)
+    weights = load_weights(checkpoint / WEIGHTS_FILE)
+    packed = (checkpoint / WEIGHTS_FILE).read_bytes()
     model = GCBC(
         manifest["executor"]["width"],
         SCENE.observation_size,
