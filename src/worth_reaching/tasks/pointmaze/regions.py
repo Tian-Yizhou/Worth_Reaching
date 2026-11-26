@@ -1,20 +1,31 @@
-"""Compare region goals with decoded point goals in Maze2D (E1).
+"""Compare region goals with decoded point goals in closed-loop Maze2D control (E1).
 
 A frozen pointmaze-latent run supplies the world model. This runner trains the region
-decoder and a latent-conditioned executor on the same archive, calibrates the arrival
-rules on validation windows, and attempts every candidate from matched seeded resets.
-The task controller is Diffuser's position and velocity tracker. It pursues state
-targets for the observation arms and tracks the terminal goal after every stage, so
-no arm hands control to a learned policy that already knows the task.
+decoder and a latent-conditioned executor on the same archive and calibrates the arrival
+rules on validation windows. Every arm then plans in closed loop: from the public
+history it declares the first queries of one completion as stages, pursues them until
+each arrives or its deadline passes, and replans after the declared stages close. Near
+the end of the budget, Diffuser's position and velocity tracker pursues the terminal
+goal.
+
+Two bounds use the same tracker. Direct tracking of the terminal goal is the floor. A
+shortest-path oracle on the privileged layout replans one cell ahead on the same
+schedule and is the ceiling. Plans are scored on the same layout for wall placement and
+geodesic progress, which the models never see.
 """
 
+import gzip
 import json
+from collections import deque
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass, field
-from hashlib import file_digest, sha256
+from hashlib import sha256
 from importlib.metadata import version
+from multiprocessing import get_context
 from pathlib import Path
 
 import numpy as np
+import torch
 
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.data.trajectory_windows import query_offsets
@@ -43,9 +54,11 @@ from worth_reaching.tasks.pointmaze.dataset import (
 from worth_reaching.tasks.pointmaze.energy import FrozenRun
 from worth_reaching.tasks.pointmaze.environment import SEED_BASE, PointMaze
 from worth_reaching.tasks.pointmaze.experiment import rollout, track
+from worth_reaching.tasks.pointmaze.geometry import MazeGeometry
 from worth_reaching.tasks.pointmaze.spec import TASKS
 
-SCHEMA = "pointmaze_regions_v1"
+SCHEMA = "pointmaze_regions_v2"
+MODES = ("forecast", "sample")
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,28 +69,35 @@ class MazeRegionConfig:
     )
     recall_levels: tuple[float, ...] = (0.5, 0.75, 0.9)
     region_samples: int = 32
-    coherence_realizations: int = 4
     calibration_windows: int = 512
     executor_pairs: int = 200_000
     bandwidth: float = 0.25
     """Kernel width in observation units normalized by the training scale."""
+    stages: int = 1
+    """Queries of each completion declared as stages before the next replan."""
+    sample_repeats: int = 2
+    """Episodes per start for arms that draw a fresh flow sample at every replan."""
+    oracle_cells: int = 1
+    oracle_speed: float = 2.0
 
     def __post_init__(self) -> None:
         if (
             not self.recall_levels
             or not all(0 < level < 1 for level in self.recall_levels)
+            or min(self.region_samples, self.calibration_windows) < 2
             or min(
-                self.region_samples,
-                self.coherence_realizations,
-                self.calibration_windows,
+                self.executor_pairs,
+                self.stages,
+                self.sample_repeats,
+                self.oracle_cells,
             )
-            < 2
-            or self.executor_pairs < 1
+            < 1
             or self.bandwidth <= 0
+            or self.oracle_speed <= 0
         ):
             raise ValueError(
-                "Use recall levels in (0, 1), at least two samples, realizations and "
-                "calibration windows, and a positive bandwidth"
+                "Use recall levels in (0, 1), at least two samples and calibration "
+                "windows, positive counts, bandwidth and oracle speed"
             )
 
 
@@ -117,7 +137,7 @@ def _region_windows(model, batch) -> shared.RegionWindows:
     )
 
 
-def _fit(frozen: FrozenRun, train, validation, limit, prefix, config, out):
+def _fit(frozen: FrozenRun, train, validation, limit, config, out):
     model = frozen.model
     settings = dict(
         history=model.config.history,
@@ -139,7 +159,8 @@ def _fit(frozen: FrozenRun, train, validation, limit, prefix, config, out):
         out=out / "checkpoints" / "region",
     )
     span = min(limit, model.config.max_horizon)
-    horizon = int(query_offsets(np.array([span]), model.config.queries)[0, prefix - 1])
+    offsets = query_offsets(np.array([span]), model.config.queries)[0]
+    horizon = int(offsets[min(config.stages, len(offsets)) - 1])
     rng = np.random.default_rng([seed, 6201])
     observations, goals, actions = sample_hindsight(
         train.observations,
@@ -211,152 +232,268 @@ def _fit(frozen: FrozenRun, train, validation, limit, prefix, config, out):
     return models, thresholds, diagnostics
 
 
-def _declare(
-    models: Models,
-    seed,
-    start,
-    goal,
-    limit,
-    prefix,
-    config: MazeRegionConfig,
-    candidates,
-):
-    completion = models.completion
-    context = completion_context(
-        [(start, np.zeros(ACTION_SIZE, dtype=np.float32))],
-        goal,
-        limit,
-        completion.config,
-    )
-    _, forecast = completion.forecast(context)
-    key = stream_seed(completion.config.seed, seed)
-    latents, _ = completion.propose(context, stream_seed(key, 0), candidates=candidates)
-    pool = np.concatenate((forecast.numpy()[:, :prefix], latents[0, :, :prefix]))
-    decoded = completion.decode(tensor(pool))
-    origin = models.normalize(start)
+@dataclass(frozen=True, slots=True)
+class Episode:
+    """One closed-loop attempt: an arm, a proposal mode and a start."""
 
-    def draw(count, stream):
-        values = models.decoder.sample(pool, origin, count, stream_seed(key, stream))
-        return values.reshape(len(pool), prefix, count, -1)
-
-    return {
-        "seed": seed,
-        "start": start.tolist(),
-        "goal": goal.tolist(),
-        "deadlines": context.offsets[0, :prefix].tolist(),
-        "candidates": [
-            {
-                "id": "forecast" if index == 0 else f"flow_{index - 1}",
-                "latents": pool[index].tolist(),
-                "decoded": decoded[index].tolist(),
-            }
-            for index in range(len(pool))
-        ],
-    }, {
-        "samples": draw(config.region_samples, 1),
-        "realizations": draw(1, 2),
-        "coherence": draw(config.coherence_realizations, 3),
-    }
+    arm: str
+    mode: str
+    seed: int
+    repeat: int = 0
 
 
-def _attempt(env, models, arm: shared.Arm, row, index, regions, limit, realization=0):
-    candidate = row["candidates"][index]
-    prefix = len(candidate["latents"])
-    samples = regions["samples"][index]
-    if arm.target == "sample":
-        source = (
-            regions["realizations"] if realization is None else regions["coherence"]
-        )
-        targets = models.denormalize(
-            source[index][:, 0 if realization is None else realization]
-        )
-    elif arm.target == "decoded":
-        targets = np.asarray(candidate["decoded"], np.float32)
-    else:
-        targets = np.asarray(candidate["latents"], np.float32)
-    stages = [
-        Stage(
-            LatentGoal(
-                np.asarray(candidate["latents"][slot], np.float32),
-                samples=samples[slot],
-                realization=targets[slot],
-            ),
-            row["deadlines"][slot],
-        )
-        for slot in range(prefix)
-    ]
+class ClosedLoop:
+    """Plan, pursue declared stages and replan, then track the terminal goal."""
 
-    def arrived(observation, goal):
-        if arm.arrival is None:
-            return env.arrived(observation, goal.realization)
-        return arm.arrival(models.normalize(observation), goal)
+    def __init__(self, env, geometry, models, arm, mode, key, limit, config):
+        """`arm` is a region arm, "oracle" for the shortest-path bound or None for
+        direct tracking."""
+        self.env, self.geometry = env, geometry
+        self.models, self.arm, self.mode = models, arm, mode
+        self.key, self.limit, self.config = key, limit, config
+        self.history: deque = deque(maxlen=models.completion.config.history)
+        self.last_action = np.zeros(ACTION_SIZE, dtype=np.float32)
+        self.goals: GoalSequence | None = None
+        self.step = 0
+        self.plans: list[dict] = []
 
-    goals = GoalSequence(stages, arrived)
-    step = 0
-
-    def policy(observation, terminal):
-        nonlocal step
-        stage = goals.advance(observation, step)
-        step += 1
+    def __call__(self, observation: np.ndarray, goal: np.ndarray) -> np.ndarray:
+        self.history.append((observation, self.last_action))
+        stage = None
+        if self.arm is not None:
+            if self.goals is not None:
+                stage = self.goals.advance(observation, self.step)
+            if stage is None and self._can_plan():
+                stage = self._replan(observation, goal)
         if stage is None:
-            return track(observation, terminal)
-        if arm.executor == "latent":
-            return models.latent_policy.act(
-                models.normalize(observation), stage.target.realization
+            action = track(observation, goal)
+        elif self.arm != "oracle" and self.arm.executor == "latent":
+            action = self.models.latent_policy.act(
+                self.models.normalize(observation), stage.target.latent
             )
-        return track(observation, stage.target.realization)
+        else:
+            action = track(observation, stage.target.realization)
+        self.last_action = np.asarray(action, dtype=np.float32)
+        self.step += 1
+        return action
 
-    episode, path = rollout(env, row["seed"], limit, policy)
-    goals.finish(path[-1], step)
-    return {
-        "success": episode["success"],
-        "arrived": goals.arrived_all,
-        "attempt_steps": goals.handoff_step,
-        "steps": episode["steps"],
-    }
+    def _can_plan(self) -> bool:
+        return self.limit - self.step > self.models.completion.config.queries
+
+    def _offsets(self) -> np.ndarray:
+        config = self.models.completion.config
+        span = min(self.limit - self.step, config.max_horizon)
+        return query_offsets(np.array([span]), config.queries)[0]
+
+    def _replan(self, observation, goal):
+        if self.arm == "oracle":
+            stages, record = self._oracle(observation, goal)
+        else:
+            stages, record = self._propose(observation, goal)
+        targets = record["targets"]
+        record.update(
+            step=self.step,
+            in_wall=[not self.geometry.free(target) for target in targets],
+            progress=[
+                self.geometry.progress(observation, target, goal) for target in targets
+            ],
+        )
+        self.plans.append(record)
+        if self.goals is None:
+            self.goals = GoalSequence(stages, self._arrived)
+        else:
+            self.goals.replace_remaining(stages)
+        return self.goals.active
+
+    def _oracle(self, observation, goal):
+        target = self.geometry.waypoint(
+            observation, goal, self.config.oracle_cells, self.config.oracle_speed
+        )
+        deadline = self.step + int(self._offsets()[0])
+        stage = Stage(LatentGoal(np.zeros(0, np.float32), realization=target), deadline)
+        return [stage], {"targets": [target.tolist()]}
+
+    def _propose(self, observation, goal):
+        models, completion = self.models, self.models.completion
+        context = completion_context(
+            list(self.history), goal, self.limit - self.step, completion.config
+        )
+        count = min(self.config.stages, completion.config.queries)
+        if self.mode == "forecast":
+            _, forecast = completion.forecast(context)
+            latents = forecast.numpy()[0, :count]
+        else:
+            routes, _ = completion.propose(
+                context, stream_seed(self.key, self.step), candidates=1
+            )
+            latents = routes[0, 0, :count]
+        decoded = completion.decode(tensor(latents))
+        draws = models.decoder.sample(
+            latents,
+            models.normalize(observation),
+            self.config.region_samples + 1,
+            stream_seed(self.key, self.step, 1),
+        )
+        realizations = models.denormalize(draws[:, -1])
+        chosen = decoded if self.arm.target == "decoded" else realizations
+        offsets = context.offsets[0, :count]
+        stages = [
+            Stage(
+                LatentGoal(
+                    latents[slot].astype(np.float32),
+                    samples=draws[slot, :-1],
+                    realization=chosen[slot].astype(np.float32),
+                ),
+                self.step + int(offsets[slot]),
+            )
+            for slot in range(count)
+        ]
+        # Latent arms are scored at the deterministic decoding of the goal they pursue.
+        targets = decoded if self.arm.executor == "latent" else chosen
+        return stages, {"targets": targets.tolist()}
+
+    def _arrived(self, observation, goal: LatentGoal) -> bool:
+        if self.arm == "oracle" or self.arm.arrival is None:
+            return self.env.arrived(observation, goal.realization)
+        return self.arm.arrival(self.models.normalize(observation), goal)
 
 
-def _rates(trials):
-    return {
-        "success": float(np.mean([t["success"] for t in trials])),
-        "arrival": float(np.mean([t["arrived"] for t in trials])),
-        "success_after_miss": float(
-            np.mean([t["success"] and not t["arrived"] for t in trials])
-        ),
-        "attempt_steps": float(np.mean([t["attempt_steps"] for t in trials])),
-    }
+_WORKER: dict = {}
 
 
-def _summarize(outcomes: list[dict]) -> dict:
-    names = list(outcomes[0]["arms"])
-    draws = np.random.default_rng(20).integers(
-        len(outcomes), size=(2000, len(outcomes))
+def _start_worker(data_dir, task_name, models, arms, config, limit):
+    torch.set_num_threads(1)
+    task = TASKS[task_name]
+    dataset, _ = load_dataset(data_dir, task.dataset_id)
+    native = dataset.recover_environment(eval_env=True)
+    _WORKER.update(
+        env=PointMaze(native, task),
+        geometry=MazeGeometry(native.unwrapped.maze),
+        models=models,
+        arms=arms,
+        config=config,
+        limit=limit,
     )
 
-    def column(name, key="success"):
-        return np.array([row["arms"][name][key] for row in outcomes])
 
+def _play(episodes: list[Episode]) -> list[dict]:
+    env, geometry = _WORKER["env"], _WORKER["geometry"]
+    rows = []
+    for episode in episodes:
+        arm = {"direct": None, "oracle": "oracle"}.get(episode.arm)
+        arm = arm or _WORKER["arms"].get(episode.arm)
+        seed_key = stream_seed(
+            _WORKER["models"].completion.config.seed,
+            episode.seed,
+            MODES.index(episode.mode),
+            episode.repeat,
+        )
+        policy = ClosedLoop(
+            env,
+            geometry,
+            _WORKER["models"],
+            arm,
+            episode.mode,
+            seed_key,
+            _WORKER["limit"],
+            _WORKER["config"],
+        )
+        outcome, _ = rollout(env, episode.seed, _WORKER["limit"], policy)
+        events = policy.goals.events if policy.goals is not None else []
+        flags = [
+            (wall, progress)
+            for plan in policy.plans
+            for wall, progress in zip(plan["in_wall"], plan["progress"], strict=True)
+        ]
+        rows.append(
+            {
+                **asdict(episode),
+                "success": outcome["success"],
+                "first_success_step": outcome["first_success_step"],
+                "steps": outcome["steps"],
+                "plans": len(policy.plans),
+                "stages": len(events),
+                "arrivals": sum(event.outcome == "arrived" for event in events),
+                "targets_in_wall": sum(wall for wall, _ in flags),
+                "targets_with_progress": sum(progress for _, progress in flags),
+                "targets": len(flags),
+                "first_plan": policy.plans[0] if policy.plans else None,
+            }
+        )
+    return rows
+
+
+def _episodes(arms, seeds, config) -> list[Episode]:
+    episodes = [Episode("direct", "forecast", seed) for seed in seeds]
+    episodes += [Episode("oracle", "forecast", seed) for seed in seeds]
+    for name in arms:
+        for seed in seeds:
+            episodes.append(Episode(name, "forecast", seed))
+            episodes += [
+                Episode(name, "sample", seed, repeat)
+                for repeat in range(config.sample_repeats)
+            ]
+    return episodes
+
+
+def _label(row) -> str:
+    return (
+        row["arm"]
+        if row["arm"] in ("direct", "oracle")
+        else f"{row['arm']}/{row['mode']}"
+    )
+
+
+def _summarize(rows: list[dict], seeds: list[int]) -> dict:
+    """Average repeats within each start, then compare arms paired by start."""
+    by_arm: dict[str, dict[int, list[dict]]] = {}
+    for row in rows:
+        by_arm.setdefault(_label(row), {}).setdefault(row["seed"], []).append(row)
+    draws = np.random.default_rng(20).integers(len(seeds), size=(2000, len(seeds)))
+
+    def per_start(label):
+        return np.array(
+            [np.mean([r["success"] for r in by_arm[label][seed]]) for seed in seeds]
+        )
+
+    def ratio(trials, numerator, denominator):
+        total = sum(t[denominator] for t in trials)
+        return sum(t[numerator] for t in trials) / total if total else None
+
+    direct, oracle = per_start("direct"), per_start("oracle")
     arms = {}
-    for name in names:
-        arms[name] = {
-            key: float(column(name, key).mean())
-            for key in ("success", "arrival", "success_after_miss", "attempt_steps")
+    for label, starts in by_arm.items():
+        trials = [trial for seed in seeds for trial in starts[seed]]
+        success = per_start(label)
+        arrival_steps = [t["first_success_step"] for t in trials if t["success"]]
+        summary = {
+            "success": float(success.mean()),
+            "mean_first_success_step": float(np.mean(arrival_steps))
+            if arrival_steps
+            else None,
+            "plans_per_episode": float(np.mean([t["plans"] for t in trials])),
+            "stage_arrival": ratio(trials, "arrivals", "stages"),
+            "targets_in_wall": ratio(trials, "targets_in_wall", "targets"),
+            "targets_with_progress": ratio(trials, "targets_with_progress", "targets"),
         }
-        if "/" in name and not name.startswith("point_native/"):
-            baseline = "point_native/" + name.split("/")[-1]
-            delta = column(name) - column(baseline)
-            arms[name]["paired_difference_from_point_native"] = float(delta.mean())
-            arms[name]["start_bootstrap_95"] = np.quantile(
+        comparisons = {"direct": direct} if label != "direct" else {}
+        if "/" in label and not label.startswith("point_native/"):
+            comparisons["point_native"] = per_start(
+                "point_native/" + label.split("/")[-1]
+            )
+        for name, baseline in comparisons.items():
+            delta = success - baseline
+            summary[f"difference_from_{name}"] = float(delta.mean())
+            summary[f"difference_from_{name}_bootstrap_95"] = np.quantile(
                 delta[draws].mean(axis=1), (0.025, 0.975)
             ).tolist()
-    return {
-        "starts": len(outcomes),
-        "arms": arms,
-        "coherence": {
-            key: float(np.mean([row["coherence"][key] for row in outcomes]))
-            for key in outcomes[0]["coherence"]
-        },
-    }
+        if label not in ("direct", "oracle"):
+            gap = oracle.mean() - direct.mean()
+            summary["share_of_oracle_gap"] = (
+                float((success.mean() - direct.mean()) / gap) if gap > 0 else None
+            )
+        arms[label] = summary
+    return {"starts": len(seeds), "arms": arms}
 
 
 def run(
@@ -367,18 +504,15 @@ def run(
     *,
     split: str,
     repeats: int,
-    candidates: int,
-    prefix: int,
+    workers: int = 1,
 ) -> dict:
     frozen = FrozenRun.load(run_path)
     manifest = frozen.manifest
     limit = manifest["evaluation"]["action_limit"]
-    if not 1 <= prefix <= frozen.model.config.queries or candidates < 2:
-        raise ValueError(
-            "Use a prefix within the query count and at least two candidates"
-        )
-    if not 0 < repeats <= SEED_BASE["test"] - SEED_BASE["dev"]:
-        raise ValueError("Use a positive number of reset seeds within the split")
+    if config.stages > frozen.model.config.queries:
+        raise ValueError("Declare at most as many stages as the model queries")
+    if not 0 < repeats <= SEED_BASE["test"] - SEED_BASE["dev"] or workers < 1:
+        raise ValueError("Use a positive number of reset seeds and workers")
     task = TASKS[manifest["task"]]
     dataset, hashes = load_dataset(data_dir, task.dataset_id)
     if hashes != manifest["dataset_files_sha256"]:
@@ -386,124 +520,71 @@ def run(
     train, validation, _ = split_trajectories(dataset)
     out.mkdir(parents=True, exist_ok=False)
     models, thresholds, diagnostics = _fit(
-        frozen, train, validation, limit, prefix, config, out
+        frozen, train, validation, limit, config, out
     )
     arms = shared.arms(
         thresholds, config.recall_levels, models.encode, config.bandwidth
     )
-    native = dataset.recover_environment(eval_env=True)
-    try:
-        env = PointMaze(native, task)
-        seeds = range(SEED_BASE[split], SEED_BASE[split] + repeats)
-        declared, arrays = [], {}
-        for seed in seeds:
-            start, goal = env.reset(seed)
-            row, regions = _declare(
-                models, seed, start, goal, limit, prefix, config, candidates
-            )
-            declared.append((row, regions))
-            for name, values in regions.items():
-                arrays[f"{seed}:{name}"] = values
-        bank_path = out / "candidate-bank.json"
-        write_json(bank_path, [row for row, _ in declared])
-        regions_path = out / "candidate-regions.npz"
-        np.savez_compressed(regions_path, **arrays)
-        write_json(
-            out / "manifest.json",
-            {
-                "schema": SCHEMA,
-                "task": manifest["task"],
-                "dataset": task.dataset_id,
-                "dataset_files_sha256": hashes,
-                "versions": {
-                    name: version(name)
-                    for name in (
-                        "minari",
-                        "gymnasium-robotics",
-                        "gymnasium",
-                        "mujoco",
-                        "torch",
-                    )
-                },
-                "source_run": str(frozen.directory),
-                "source_weights_sha256": frozen.weights_sha256,
-                "action_limit": limit,
-                "split": split,
-                "seeds": list(seeds),
-                "candidates": candidates,
-                "prefix": prefix,
-                "regions": asdict(config),
-                "arms": {name: shared.describe(arm) for name, arm in arms.items()},
-                "native_arrival": "PointMaze sparse goal predicate on public XY",
-                "continuation": "position and velocity tracker toward the terminal goal",
-                "compute": describe(),
-                "code_revision": code_revision(),
-                "region_weights_sha256": sha256(
-                    (out / "region-weights.pt").read_bytes()
-                ).hexdigest(),
-                "candidate_bank_sha256": _digest(bank_path),
-                "candidate_regions_sha256": _digest(regions_path),
+    seeds = list(range(SEED_BASE[split], SEED_BASE[split] + repeats))
+    write_json(
+        out / "manifest.json",
+        {
+            "schema": SCHEMA,
+            "task": manifest["task"],
+            "dataset": task.dataset_id,
+            "dataset_files_sha256": hashes,
+            "versions": {
+                name: version(name)
+                for name in (
+                    "minari",
+                    "gymnasium-robotics",
+                    "gymnasium",
+                    "mujoco",
+                    "torch",
+                )
             },
-        )
-        outcomes = []
-        for row, regions in declared:
-            direct, _ = rollout(env, row["seed"], limit, track)
-            scored = {
-                "direct": _rates([{**direct, "arrived": False, "attempt_steps": 0}])
-            }
-            steps = direct["steps"]
-            for name, arm in arms.items():
-                trials = [
-                    _attempt(
-                        env, models, arm, row, index, regions, limit, realization=None
-                    )
-                    for index in range(len(row["candidates"]))
-                ]
-                steps += sum(trial["steps"] for trial in trials)
-                scored[f"{name}/forecast"] = _rates(trials[:1])
-                scored[f"{name}/uniform"] = _rates(trials[1:])
-            coherence_arm = shared.Arm("observation", "sample")
-            values = []
-            for index in range(1, len(row["candidates"])):
-                region = []
-                for realization in range(config.coherence_realizations):
-                    trial = _attempt(
-                        env,
-                        models,
-                        coherence_arm,
-                        row,
-                        index,
-                        regions,
-                        limit,
-                        realization,
-                    )
-                    steps += trial["steps"]
-                    region.append(float(trial["success"]))
-                values.append(region)
-            outcomes.append(
-                {
-                    "seed": row["seed"],
-                    "arms": scored,
-                    "coherence": {"values": values, **shared.coherence(values, 1)},
-                    "evaluation_steps": steps,
-                }
-            )
-    finally:
-        native.close()
-    with (out / "attempts.jsonl").open("w", encoding="utf-8") as stream:
-        for row in outcomes:
-            stream.write(json.dumps(row) + "\n")
+            "source_run": str(frozen.directory),
+            "source_weights_sha256": frozen.weights_sha256,
+            "action_limit": limit,
+            "split": split,
+            "seeds": seeds,
+            "regions": asdict(config),
+            "arms": {name: shared.describe(arm) for name, arm in arms.items()},
+            "modes": {
+                "forecast": "deterministic forecast at every replan",
+                "sample": "one fresh flow sample at every replan",
+            },
+            "bounds": {
+                "direct": "position and velocity tracker toward the terminal goal",
+                "oracle": "privileged shortest-path waypoint on the same replanning "
+                "schedule with native arrival",
+            },
+            "native_arrival": "PointMaze sparse goal predicate on public XY",
+            "continuation": "position and velocity tracker toward the terminal goal",
+            "compute": {**describe(), "eval_workers": workers},
+            "code_revision": code_revision(),
+            "region_weights_sha256": sha256(
+                (out / "region-weights.pt").read_bytes()
+            ).hexdigest(),
+        },
+    )
+    episodes = _episodes(arms, seeds, config)
+    shards = [episodes[index::workers] for index in range(workers)]
+    with ProcessPoolExecutor(
+        len(shards),
+        mp_context=get_context("spawn"),
+        initializer=_start_worker,
+        initargs=(data_dir, manifest["task"], models, arms, config, limit),
+    ) as pool:
+        rows = [row for shard in pool.map(_play, shards) for row in shard]
+    rows.sort(key=lambda row: (row["arm"], row["mode"], row["seed"], row["repeat"]))
+    with gzip.open(out / "attempts.jsonl.gz", "wt", encoding="utf-8") as stream:
+        for row in rows:
+            stream.write(json.dumps(row, separators=(",", ":")) + "\n")
     summary = {
         **diagnostics,
-        "evaluation_environment_steps": sum(
-            row["evaluation_steps"] for row in outcomes
-        ),
-        **_summarize(outcomes),
+        "evaluation_environment_steps": sum(row["steps"] for row in rows),
+        **_summarize(rows, seeds),
     }
     write_json(out / "summary.json", summary)
     return summary
-
-
-def _digest(path: Path) -> str:
-    with path.open("rb") as stream:
-        return file_digest(stream, "sha256").hexdigest()

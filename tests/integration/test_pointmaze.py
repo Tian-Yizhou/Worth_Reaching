@@ -260,8 +260,8 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
                 regions_out,
                 "--eval-repeats",
                 "1",
-                "--candidates",
-                "2",
+                "--sample-repeats",
+                "1",
                 "--region-updates",
                 "2",
                 "--executor-updates",
@@ -272,8 +272,6 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
                 "0.75",
                 "--region-samples",
                 "4",
-                "--coherence-realizations",
-                "2",
             ],
             check=True,
             capture_output=True,
@@ -284,13 +282,44 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
         assert {"point_native", "sample_support@0.75", "region_flow@0.75"} <= set(
             manifest["arms"]
         )
-        (row,) = json.loads((regions_out / "candidate-bank.json").read_text())
-        assert row["seed"] == 29001 and len(row["candidates"]) == 3
-        assert row["deadlines"] == [2]
         regions_summary = json.loads((regions_out / "summary.json").read_text())
         assert regions_summary["starts"] == 1
-        assert regions_summary["arms"]["direct"]["arrival"] == 0
-        assert (
-            "paired_difference_from_point_native"
-            in regions_summary["arms"]["region_flow@0.75/uniform"]
-        )
+        arms = regions_summary["arms"]
+        assert {"direct", "oracle", "point_native/forecast"} <= set(arms)
+        assert arms["direct"]["plans_per_episode"] == 0
+        assert arms["oracle"]["plans_per_episode"] >= 1
+        flow = arms["region_flow@0.75/sample"]
+        assert "difference_from_point_native" in flow
+        assert 0 <= flow["targets_in_wall"] <= 1
+        with gzip.open(regions_out / "attempts.jsonl.gz", "rt") as stream:
+            attempts = [json.loads(line) for line in stream]
+        assert len(attempts) == 2 + 2 * len(manifest["arms"])
+        assert {row["seed"] for row in attempts} == {29001}
+
+
+def test_maze_geometry_scores_walls_and_walks_the_shortest_path():
+    gym = pytest.importorskip("gymnasium")
+    robotics = pytest.importorskip("gymnasium_robotics")
+    np = pytest.importorskip("numpy")
+    from worth_reaching.tasks.pointmaze.geometry import MazeGeometry
+
+    gym.register_envs(robotics)
+    env = gym.make("PointMaze_Medium-v3")
+    try:
+        geometry = MazeGeometry(env.unwrapped.maze)
+    finally:
+        env.close()
+    start = np.array([2.5, 1.5, 0, 0], np.float32)
+    goal = np.array([2.5, -2.5, 0, 0], np.float32)
+    # The cell below the start is a wall, so the path detours through the middle.
+    assert not geometry.free(np.array([2.5, 0.5]))
+    assert not geometry.free(np.array([9.0, 0.0]))
+    assert geometry.distance(start, goal) == 8
+    waypoint = geometry.waypoint(start, goal, cells=1, speed=2.0)
+    np.testing.assert_allclose(waypoint[:2], [1.5, 1.5])
+    np.testing.assert_allclose(waypoint[2:], [-2.0, 0.0], atol=1e-6)
+    assert geometry.progress(start, waypoint, goal)
+    near = np.array([2.5, -1.5, 0, 0], np.float32)
+    np.testing.assert_array_equal(
+        geometry.waypoint(near, goal, cells=1, speed=2.0), goal
+    )

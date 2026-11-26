@@ -2,8 +2,8 @@
 
 The task runner supplies the world model's predictions on masked windows, the
 environment and the observation-space executor. This module fits the region decoder,
-calibrates every arrival rule to the same recall on held-out windows, defines the arms
-and summarizes coherence.
+calibrates every arrival rule to the same recall on held-out windows and defines the
+arms.
 """
 
 from collections.abc import Callable
@@ -182,13 +182,3 @@ def describe(arm: Arm) -> dict:
     else:
         arrival = {"rule": type(rule).__name__, "threshold": rule.threshold}
     return {"executor": arm.executor, "target": arm.target, "arrival": arrival}
-
-
-def coherence(values: np.ndarray, repeats: int) -> dict:
-    """Variance of value within regions, between regions, and binomial noise."""
-    values = np.asarray(values, dtype=float)
-    return {
-        "within_region_variance": float(values.var(axis=1).mean()),
-        "between_region_variance": float(values.mean(axis=1).var()),
-        "binomial_noise_variance": float((values * (1 - values)).mean() / repeats),
-    }

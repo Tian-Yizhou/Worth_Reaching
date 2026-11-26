@@ -56,8 +56,9 @@ def _pointmaze_regions(args: argparse.Namespace) -> dict[str, object]:
         ),
         recall_levels=tuple(args.recall_levels),
         region_samples=args.region_samples,
-        coherence_realizations=args.coherence_realizations,
         executor_pairs=args.executor_pairs,
+        stages=args.stages,
+        sample_repeats=args.sample_repeats,
     )
     return run(
         args.data_dir,
@@ -66,8 +67,7 @@ def _pointmaze_regions(args: argparse.Namespace) -> dict[str, object]:
         config,
         split=args.eval_split,
         repeats=args.eval_repeats,
-        candidates=args.candidates,
-        prefix=args.prefix_length,
+        workers=args.eval_workers,
     )
 
 
@@ -123,7 +123,7 @@ def register_commands(commands) -> argparse.ArgumentParser:
     latent_energy.set_defaults(run=_pointmaze_latent_energy, extra="pointmaze")
     regions = commands.add_parser(
         "pointmaze-regions",
-        help="Compare region goals with decoded point goals from a frozen PointMaze run",
+        help="Compare region and point goals in closed loop from a frozen PointMaze run",
     )
     regions.add_argument(
         "--checkpoint",
@@ -137,8 +137,19 @@ def register_commands(commands) -> argparse.ArgumentParser:
     regions.add_argument("--out", type=Path, required=True)
     regions.add_argument("--eval-split", choices=("dev", "test"), default="dev")
     regions.add_argument("--eval-repeats", type=int, default=64)
-    regions.add_argument("--candidates", type=int, default=8)
-    regions.add_argument("--prefix-length", type=int, default=1)
+    regions.add_argument("--eval-workers", type=int, default=1)
+    regions.add_argument(
+        "--stages",
+        type=int,
+        default=1,
+        help="Queries declared as stages before each replan",
+    )
+    regions.add_argument(
+        "--sample-repeats",
+        type=int,
+        default=2,
+        help="Episodes per start for arms that draw a flow sample at every replan",
+    )
     regions.add_argument("--region-updates", type=int, default=3000)
     regions.add_argument("--executor-updates", type=int, default=4000)
     regions.add_argument("--executor-pairs", type=int, default=200_000)
@@ -146,6 +157,5 @@ def register_commands(commands) -> argparse.ArgumentParser:
         "--recall-levels", type=float, nargs="+", default=[0.5, 0.75, 0.9]
     )
     regions.add_argument("--region-samples", type=int, default=32)
-    regions.add_argument("--coherence-realizations", type=int, default=4)
     regions.set_defaults(run=_pointmaze_regions, extra="pointmaze")
     return pointmaze
