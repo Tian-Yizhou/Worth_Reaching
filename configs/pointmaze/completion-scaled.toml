@@ -1,0 +1,15 @@
+# Scaled Maze2D world model for closed-loop E1. Codec, predictor and flow are wider and
+# see about 50 times more examples than the original development recipe.
+[model]
+windows = 200000
+batch_size = 512
+width = 512
+latent_size = 16
+codec_updates = 20000
+predictor_updates = 100000
+predictor_val_every = 1000
+predictor_patience = 20
+flow_updates = 100000
+flow_width = 512
+flow_batch_size = 512
+learning_rate = 0.0003

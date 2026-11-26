@@ -37,6 +37,8 @@ class CompletionConfig:
     codec_updates: int = 500
     predictor_updates: int = 1200
     flow_updates: int = 700
+    flow_width: int = 128
+    flow_batch_size: int = 64
     candidates: int = 4
     predictor_stopping: PredictorStopping = PredictorStopping()
     learning_rate: float = 0.001
@@ -55,6 +57,8 @@ class CompletionConfig:
                 self.codec_updates,
                 self.predictor_updates,
                 self.flow_updates,
+                self.flow_width,
+                self.flow_batch_size,
                 self.candidates,
             )
             < 1
@@ -310,6 +314,8 @@ def fit(
         seed=config.seed,
         updates=config.flow_updates,
         learning_rate=config.learning_rate,
+        width=config.flow_width,
+        batch_size=config.flow_batch_size,
         out=out / "flow",
         resume=stage_resume(resume, "flow"),
     )
