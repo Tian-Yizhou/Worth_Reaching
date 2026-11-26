@@ -1,16 +1,24 @@
 """Test whether frozen completion energy predicts value in PointMaze."""
 
+import json
 from collections import defaultdict
-from hashlib import file_digest
+from dataclasses import dataclass
+from hashlib import file_digest, sha256
 from importlib.metadata import version
 from pathlib import Path
 
 import numpy as np
 import torch
+from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
+from worth_reaching.models.continuous_completion import (
+    BudgetedCompletionConfig,
+    CompletionConfig,
+    LearnedCompletion,
+)
 from worth_reaching.models.latent_energy import prefix_energy
-from worth_reaching.models.training import stream_seed
+from worth_reaching.models.training import PredictorStopping, stream_seed
 from worth_reaching.planning.receding_goals import completion_context
 from worth_reaching.tasks.pointmaze.dataset import ACTION_SIZE, load_dataset
 from worth_reaching.tasks.pointmaze.environment import SEED_BASE, PointMaze
@@ -20,8 +28,45 @@ from worth_reaching.tasks.pointmaze.experiment import (
     rollout,
     track,
 )
-from worth_reaching.tasks.pointmaze.probe import FrozenRun
 from worth_reaching.tasks.pointmaze.spec import TASKS
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenRun:
+    directory: Path
+    manifest: dict
+    model: LearnedCompletion
+    weights_sha256: str
+    episodes: dict
+
+    @classmethod
+    def load(cls, directory: Path) -> "FrozenRun":
+        manifest = json.loads((directory / "manifest.json").read_text())
+        if manifest.get("schema") not in {
+            "pointmaze_latent_completion_v2",
+            ALIGNED_SCHEMA,
+            BUDGET_SCHEMA,
+        }:
+            raise ValueError(f"Expected a saved PyTorch PointMaze run in {directory}")
+        if "action_limit" not in manifest["evaluation"]:
+            raise ValueError(f"Choose a budget-<steps> subdirectory within {directory}")
+        settings = dict(manifest["training"])
+        if "predictor_stopping" in settings:
+            settings["predictor_stopping"] = PredictorStopping(
+                **settings["predictor_stopping"]
+            )
+        config_type = (
+            BudgetedCompletionConfig
+            if manifest["schema"] == BUDGET_SCHEMA
+            else CompletionConfig
+        )
+        config = config_type(**settings)
+        raw = (directory / "weights.msgpack").read_bytes()
+        model = LearnedCompletion.from_weights(
+            config, serialization.msgpack_restore(raw)
+        )
+        episodes = json.loads((directory / "episodes.json").read_text())
+        return cls(directory, manifest, model, sha256(raw).hexdigest(), episodes)
 
 
 def _declare(

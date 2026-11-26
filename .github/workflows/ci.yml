@@ -26,13 +26,7 @@ jobs:
         with:
           version: "0.13.7"
           enable-cache: true
-      - run: uv sync --locked --python 3.12 --group dev --extra training-cpu --extra minigrid --extra craftax --extra ogbench --extra pointmaze
+      - run: uv sync --locked --python 3.12 --group dev --extra training-cpu --extra grid --extra ogbench --extra pointmaze
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync ruff format --check src tests
       - run: uv run --no-sync pytest
-      - run: uv run --no-sync wr pilot --config configs/minigrid/keycorridor.toml --out results/ci/keycorridor
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: keycorridor-pilot
-          path: results/ci/keycorridor
-          if-no-files-found: error

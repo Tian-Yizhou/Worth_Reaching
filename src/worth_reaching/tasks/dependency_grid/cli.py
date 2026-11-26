@@ -101,4 +101,4 @@ def register_commands(commands) -> None:
     latent.add_argument("--candidates", type=int, default=8)
     latent.add_argument("--density-samples", type=int, default=128)
     latent.add_argument("--slip-probability", type=float, default=0.10)
-    latent.set_defaults(run=_latent, extra="craftax")
+    latent.set_defaults(run=_latent, extra="grid")

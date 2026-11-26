@@ -25,9 +25,3 @@ class ManipulationTask:
 
 
 SCENE = ManipulationTask("scene", "scene", 40, 750, 43001)
-PUZZLE_BOARDS = {
-    "3x3": ManipulationTask("puzzle", "puzzle-3x3", 55, 500, 46001),
-    "4x4": ManipulationTask("puzzle", "puzzle-4x4", 83, 500, 46001),
-    "4x5": ManipulationTask("puzzle", "puzzle-4x5", 99, 1000, 46001),
-    "4x6": ManipulationTask("puzzle", "puzzle-4x6", 115, 1000, 46001),
-}

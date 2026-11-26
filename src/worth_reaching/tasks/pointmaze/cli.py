@@ -29,18 +29,6 @@ def _pointmaze_latent(args: argparse.Namespace) -> dict[str, object]:
     )
 
 
-def _pointmaze_first_targets(args: argparse.Namespace) -> dict[str, object]:
-    from worth_reaching.tasks.pointmaze.probe import run
-
-    return run(
-        args.data_dir,
-        args.runs,
-        args.out,
-        args.max_starts,
-        compare_continuations=args.compare_continuations,
-    )
-
-
 def _pointmaze_latent_energy(args: argparse.Namespace) -> dict[str, object]:
     from worth_reaching.tasks.pointmaze.energy import run
 
@@ -91,24 +79,6 @@ def register_commands(commands) -> argparse.ArgumentParser:
         help="Maximum span for each model prediction (defaults to archive coverage)",
     )
     pointmaze.set_defaults(run=_pointmaze_latent, extra="pointmaze")
-    first_targets = commands.add_parser(
-        "pointmaze-first-targets",
-        help="Evaluate frozen PointMaze first targets from matched resets",
-    )
-    first_targets.add_argument("--runs", nargs="+", type=Path, required=True)
-    first_targets.add_argument(
-        "--data-dir", type=Path, default=Path("results/datasets/minari")
-    )
-    first_targets.add_argument("--out", type=Path, required=True)
-    first_targets.add_argument(
-        "--max-starts", type=int, help="Limit starts for a smoke check"
-    )
-    first_targets.add_argument(
-        "--compare-continuations",
-        action="store_true",
-        help="Use the first sampled target and compare direct and replanning continuations",
-    )
-    first_targets.set_defaults(run=_pointmaze_first_targets, extra="pointmaze")
     latent_energy = commands.add_parser(
         "pointmaze-latent-energy",
         help="Test frozen latent energy against matched PointMaze candidate attempts",

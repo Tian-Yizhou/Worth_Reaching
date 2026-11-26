@@ -62,11 +62,6 @@ def normalized_batch(batch, mean, scale):
     )
 
 
-def validation_error(model, batch):
-    observation, goal, actions = batch
-    return (model(observation, goal).clamp(-1, 1) - actions).square().mean()
-
-
 def policy_from_model(model: GCBC, mean: np.ndarray, scale: np.ndarray):
     @torch.no_grad()
     def act(observation: np.ndarray, goal: np.ndarray) -> np.ndarray:

@@ -7,7 +7,6 @@ import gymnasium as gym
 import mujoco
 import numpy as np
 import ogbench  # noqa: F401 - registers OGBench Gymnasium environments
-from ogbench.manipspace.envs.puzzle_env import PuzzleEnv
 from ogbench.manipspace.envs.scene_env import SceneEnv
 
 from worth_reaching.tasks.ogbench_manipulation.spec import ManipulationTask
@@ -26,11 +25,7 @@ class _SeededScene(_PersistentActionSpace, SceneEnv):
     pass
 
 
-class _SeededPuzzle(_PersistentActionSpace, PuzzleEnv):
-    pass
-
-
-_ENV_TYPES = {"scene": _SeededScene, "puzzle": _SeededPuzzle}
+_ENV_TYPES = {"scene": _SeededScene}
 
 
 @dataclass(frozen=True, slots=True)

@@ -82,19 +82,3 @@ class ComputeConfig:
                 )
             selected = tuple(visible[index] for index in self.gpus)
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(selected)
-
-    def validate_backend(self) -> None:
-        if self.platform != "gpu" and self.gpus is None:
-            return
-        import jax
-
-        try:
-            devices = jax.local_devices()
-        except RuntimeError as error:
-            raise ValueError(
-                f"CUDA initialization failed. Install the cuda12 extra and check device visibility. {error}"
-            ) from error
-        if any(device.platform != "gpu" for device in devices) or (
-            self.gpus is not None and len(devices) != len(self.gpus)
-        ):
-            raise ValueError("JAX could not initialize all requested GPUs")

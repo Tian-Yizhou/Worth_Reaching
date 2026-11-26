@@ -65,34 +65,6 @@ def test_scene_restores_goal_physics_and_next_observation():
 
 
 @pytest.mark.parametrize(
-    ("board", "observation_size", "limit"),
-    [("3x3", 55, 500), ("4x4", 83, 500), ("4x5", 99, 1000), ("4x6", 115, 1000)],
-)
-def test_puzzle_boards_restore_public_goal_and_native_physics(
-    board, observation_size, limit
-):
-    np = pytest.importorskip("numpy")
-    pytest.importorskip("ogbench")
-    from worth_reaching.tasks.ogbench_manipulation.environment import Manipulation
-    from worth_reaching.tasks.ogbench_manipulation.spec import PUZZLE_BOARDS
-
-    env = Manipulation(PUZZLE_BOARDS[board])
-    try:
-        start = env.capture(4, 46001)
-        assert env.environment.spec.max_episode_steps == limit
-        assert start.observation.shape == start.goal.shape == (observation_size,)
-        action = np.full(5, 0.2, dtype=np.float32)
-        first = env.step(action)
-        env.capture(2, 81000)
-        np.testing.assert_array_equal(env.restore(start), start.observation)
-        replay = env.step(action)
-        np.testing.assert_array_equal(first[0], replay[0])
-        assert first[1:] == replay[1:]
-    finally:
-        env.close()
-
-
-@pytest.mark.parametrize(
     (
         "command",
         "options",
@@ -111,15 +83,6 @@ def test_puzzle_boards_restore_public_goal_and_native_physics(
             40,
             750,
             43001,
-        ),
-        (
-            "puzzle-latent",
-            ["--board", "4x5", "--task", "4"],
-            [4],
-            "puzzle-4x5",
-            99,
-            1000,
-            46001,
         ),
     ],
 )

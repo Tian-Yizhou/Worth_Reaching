@@ -78,13 +78,6 @@ class RecedingGoals:
         self.step += 1
         return action
 
-    def record_prefix_step(self, observation: np.ndarray, action: np.ndarray) -> None:
-        """Ingest an executed action so the next policy call replans at the handoff."""
-        self.history.append((observation, self.last_action))
-        self.last_action = action
-        self.step += 1
-        self.deadline = self.step
-
     def _plan(self, goal: np.ndarray) -> np.ndarray:
         config = self.completion.config
         remaining = self.limit - self.step
