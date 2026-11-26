@@ -1,6 +1,15 @@
 # Experimental environments
 
-Use MiniGrid KeyCorridor to check evaluation contracts, Craftax-Classic Symbolic to test the compound objective, and OGBench AntMaze for comparisons with published planning methods. [Research design](trajectory-completion.md)
+The paper uses two controlled discrete tasks to establish the claims and two continuous-control tasks to test them on standard benchmarks. The other environments keep their runners but are outside the paper's main line. [Research plan](latent-subgoal-research.md) · [Priorities](../PLAN.md#paper-experiments-by-priority)
+
+| Environment | Role and rationale | Adaptation or limitation |
+| --- | --- | --- |
+| Dependency grid | Ordered keys and gates with two switchable destinations from one start. Tests goal-dependent value, frozen energy and outcome selection, and later task depth. | Layout-disjoint splits and paired action slips. [Protocol](experiments.md#compare-ordered-targets-in-the-dependency-grid) |
+| Budget routes | One terminal with several resource and gate routes whose value depends on the budget. Tests composition, budget-dependent choice and low-support routes. | One graph topology so far. A coverage sweep and new topologies are planned. [Protocol](experiments.md#compose-latent-goals-under-action-budgets) |
+| D4RL Maze2D (maintained PointMaze) | Controlled comparison with Diffuser on the same environments, data, resets and budgets. | Farama's maintained versions differ from the original D4RL `v1` environments, so both methods run on the same versions. [Protocol](experiments.md#run-the-diffuser-maze2d-pilots) |
+| OGBench Scene Tasks 4 and 5 | Cube-in-drawer and rearrangement, where opening the drawer is a valuable intermediate goal. | The executor must pass the drawer-insertion diagnostic before the terminal comparison. [Scene protocol](experiments.md#run-state-based-ogbench-scene) |
+
+### Retained environments outside the paper
 
 | Environment | Role and rationale | Adaptation or limitation |
 | --- | --- | --- |
@@ -8,14 +17,13 @@ Use MiniGrid KeyCorridor to check evaluation contracts, Craftax-Classic Symbolic
 | Craftax-Classic Symbolic | Craft an iron pickaxe by a fixed deadline and survive through it. Repeat attempts from the same simulator state with fresh random keys. | Use public symbolic observations for collection and model decisions. Score at the deadline or death. [Craftax](https://proceedings.mlr.press/v235/matthews24a.html) · [Task rules](architecture.md#craftax-collection-contract) |
 | OGBench AntMaze state observations | Compare shared trajectory-planning baselines under one evaluation protocol. The stitch data tests composition of short fragments. | Use the official dataset, goal set and action budget. Track extra environment interaction used for training separately. [OGBench](https://arxiv.org/html/2410.20092) |
 | OGBench Visual AntMaze | Evaluate how the framework performs on tasks from HDFlow. | Report results with the documented visual inputs and goals, and name the data and budget differences when citing published scores. [HDFlow](https://arxiv.org/html/2605.04525v1) |
-| OGBench Scene | Test object configurations that require sequential manipulation of locks, doors and a cube. | Use state observations for the initial comparison. [Scene protocol](experiments.md#run-state-based-ogbench-scene) |
 | OGBench Puzzle | Test long chains of button presses toward a specified board pattern. | Use the benchmark's official goals. A later analysis can group goals by minimum presses within each board. [Puzzle protocol](experiments.md#run-state-based-ogbench-puzzle) |
 
 For Craftax, repeated attempts from a snapshot estimate variation conditional on that hidden world. Use held-out worlds to measure generalization across layouts and initial conditions.
 
 ## Robotics benchmark sequence
 
-Start with the state-based OGBench `antmaze-large-navigate-v0` dataset to establish a continuous-action executor and goal-conditioned behavior cloning baseline. Use `antmaze-large-stitch-v0` to test whether candidate routes connect short motion fragments. Both datasets use the `antmaze-large-v0` simulator. Track the official goal set and action budget, separate interaction used for feedback from evaluation, and use the same executor in the proposer comparison. [Baseline command](experiments.md#train-the-antmaze-gcbc-baseline) · [OGBench tasks and datasets](https://seohong.me/projects/ogbench/#locomotion-tasks)
+This AntMaze sequence is deferred until the paper's Maze2D and Scene comparisons are complete. Start with the state-based OGBench `antmaze-large-navigate-v0` dataset to establish a continuous-action executor and goal-conditioned behavior cloning baseline. Use `antmaze-large-stitch-v0` to test whether candidate routes connect short motion fragments. Both datasets use the `antmaze-large-v0` simulator. Track the official goal set and action budget, separate interaction used for feedback from evaluation, and use the same executor in the proposer comparison. [Baseline command](experiments.md#train-the-antmaze-gcbc-baseline) · [OGBench tasks and datasets](https://seohong.me/projects/ogbench/#locomotion-tasks)
 
 For comparison with HDFlow, then evaluate visual AntMaze-Medium and Large with pixel observations and document the input, dataset and budget match to Table 6. OGBench Cube is an option for a manipulation follow-up after establishing the shared navigation pipeline. HDFlow also evaluates furniture assembly in simulation and on the robot, and robot manipulation in RLBench. [HDFlow experiments and dataset protocol](https://arxiv.org/html/2605.04525v2#S5.SS3)
 
