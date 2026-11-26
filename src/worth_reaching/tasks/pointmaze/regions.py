@@ -16,7 +16,6 @@ geodesic progress, which the models never see.
 
 import gzip
 import json
-from collections import deque
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass, field
 from hashlib import sha256
@@ -30,6 +29,18 @@ import torch
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.data.trajectory_windows import query_offsets
 from worth_reaching.evaluation import regions as shared
+from worth_reaching.evaluation.closed_loop import (
+    DIRECT,
+    ORACLE,
+    ClosedLoop,
+    Controls,
+    Episode,
+    RegionModels,
+    episode_key,
+    episodes,
+    record,
+    summarize,
+)
 from worth_reaching.models.executor import (
     ExecutorConfig,
     fit_policy,
@@ -43,9 +54,6 @@ from worth_reaching.models.training import (
     tensor,
     weights,
 )
-from worth_reaching.planning.arrival import LatentGoal
-from worth_reaching.planning.goals import GoalSequence, Stage
-from worth_reaching.planning.receding_goals import completion_context
 from worth_reaching.tasks.pointmaze.dataset import (
     ACTION_SIZE,
     load_dataset,
@@ -58,7 +66,6 @@ from worth_reaching.tasks.pointmaze.geometry import MazeGeometry
 from worth_reaching.tasks.pointmaze.spec import TASKS
 
 SCHEMA = "pointmaze_regions_v2"
-MODES = ("forecast", "sample")
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,42 +108,6 @@ class MazeRegionConfig:
             )
 
 
-@dataclass
-class Models:
-    completion: object
-    decoder: object
-    latent_policy: object
-
-    def normalize(self, observation):
-        return (observation - self.completion.mean) / self.completion.scale
-
-    def denormalize(self, values):
-        return values * self.completion.scale + self.completion.mean
-
-    def encode(self, normalized: np.ndarray) -> np.ndarray:
-        return (
-            self.completion.codec.encode(tensor(normalized)[None]).detach().numpy()[0]
-        )
-
-
-def _region_windows(model, batch) -> shared.RegionWindows:
-    _, forecast = model.forecast(batch.context)
-    states = (batch.targets - model.mean) / model.scale
-    encoded = model.codec.encode(tensor(states)).detach().numpy()
-    contexts = np.repeat(
-        ((batch.context.observations[:, -1] - model.mean) / model.scale)[:, None],
-        states.shape[1],
-        axis=1,
-    )
-    size = states.shape[-1]
-    return shared.RegionWindows(
-        forecast.numpy().reshape(-1, encoded.shape[-1]),
-        encoded.reshape(-1, encoded.shape[-1]),
-        contexts.reshape(-1, size).astype(np.float32),
-        states.reshape(-1, size).astype(np.float32),
-    )
-
-
 def _fit(frozen: FrozenRun, train, validation, limit, config, out):
     model = frozen.model
     settings = dict(
@@ -153,7 +124,7 @@ def _fit(frozen: FrozenRun, train, validation, limit, config, out):
         **settings,
     )
     decoder = shared.fit_decoder(
-        _region_windows(model, batch),
+        shared.region_windows(model, batch),
         config.region,
         seed=seed,
         out=out / "checkpoints" / "region",
@@ -170,13 +141,13 @@ def _fit(frozen: FrozenRun, train, validation, limit, config, out):
         horizon,
         rng,
     )
-    models = Models(model, decoder, None)
+    models = RegionModels(model, decoder)
     normalized, normalized_goals = (
         models.normalize(observations),
         models.normalize(goals),
     )
     latent_goals = model.codec.encode(tensor(normalized_goals)).detach().numpy()
-    models.latent_policy = fit_policy(
+    latent_policy = fit_policy(
         normalized,
         latent_goals,
         actions,
@@ -191,7 +162,7 @@ def _fit(frozen: FrozenRun, train, validation, limit, config, out):
     thresholds, calibration = shared.calibrate(
         decoder,
         models.encode,
-        _region_windows(model, heldout),
+        shared.region_windows(model, heldout),
         levels=config.recall_levels,
         samples=config.region_samples,
         bandwidth=config.bandwidth,
@@ -208,7 +179,7 @@ def _fit(frozen: FrozenRun, train, validation, limit, config, out):
     )
     predicted = np.stack(
         [
-            models.latent_policy.act(o, g)
+            latent_policy.act(o, g)
             for o, g in zip(
                 models.normalize(check_obs),
                 model.codec.encode(tensor(models.normalize(check_goals)))
@@ -227,273 +198,70 @@ def _fit(frozen: FrozenRun, train, validation, limit, config, out):
     }
     save_weights(
         out / "region-weights.pt",
-        {"decoder": decoder.weights, "latent_executor": weights(models.latent_policy)},
+        {"decoder": decoder.weights, "latent_executor": weights(latent_policy)},
     )
-    return models, thresholds, diagnostics
-
-
-@dataclass(frozen=True, slots=True)
-class Episode:
-    """One closed-loop attempt: an arm, a proposal mode and a start."""
-
-    arm: str
-    mode: str
-    seed: int
-    repeat: int = 0
-
-
-class ClosedLoop:
-    """Plan, pursue declared stages and replan, then track the terminal goal."""
-
-    def __init__(self, env, geometry, models, arm, mode, key, limit, config):
-        """`arm` is a region arm, "oracle" for the shortest-path bound or None for
-        direct tracking."""
-        self.env, self.geometry = env, geometry
-        self.models, self.arm, self.mode = models, arm, mode
-        self.key, self.limit, self.config = key, limit, config
-        self.history: deque = deque(maxlen=models.completion.config.history)
-        self.last_action = np.zeros(ACTION_SIZE, dtype=np.float32)
-        self.goals: GoalSequence | None = None
-        self.step = 0
-        self.plans: list[dict] = []
-
-    def __call__(self, observation: np.ndarray, goal: np.ndarray) -> np.ndarray:
-        self.history.append((observation, self.last_action))
-        stage = None
-        if self.arm is not None:
-            if self.goals is not None:
-                stage = self.goals.advance(observation, self.step)
-            if stage is None and self._can_plan():
-                stage = self._replan(observation, goal)
-        if stage is None:
-            action = track(observation, goal)
-        elif self.arm != "oracle" and self.arm.executor == "latent":
-            action = self.models.latent_policy.act(
-                self.models.normalize(observation), stage.target.latent
-            )
-        else:
-            action = track(observation, stage.target.realization)
-        self.last_action = np.asarray(action, dtype=np.float32)
-        self.step += 1
-        return action
-
-    def _can_plan(self) -> bool:
-        return self.limit - self.step > self.models.completion.config.queries
-
-    def _offsets(self) -> np.ndarray:
-        config = self.models.completion.config
-        span = min(self.limit - self.step, config.max_horizon)
-        return query_offsets(np.array([span]), config.queries)[0]
-
-    def _replan(self, observation, goal):
-        if self.arm == "oracle":
-            stages, record = self._oracle(observation, goal)
-        else:
-            stages, record = self._propose(observation, goal)
-        targets = record["targets"]
-        record.update(
-            step=self.step,
-            in_wall=[not self.geometry.free(target) for target in targets],
-            progress=[
-                self.geometry.progress(observation, target, goal) for target in targets
-            ],
-        )
-        self.plans.append(record)
-        if self.goals is None:
-            self.goals = GoalSequence(stages, self._arrived)
-        else:
-            self.goals.replace_remaining(stages)
-        return self.goals.active
-
-    def _oracle(self, observation, goal):
-        target = self.geometry.waypoint(
-            observation, goal, self.config.oracle_cells, self.config.oracle_speed
-        )
-        deadline = self.step + int(self._offsets()[0])
-        stage = Stage(LatentGoal(np.zeros(0, np.float32), realization=target), deadline)
-        return [stage], {"targets": [target.tolist()]}
-
-    def _propose(self, observation, goal):
-        models, completion = self.models, self.models.completion
-        context = completion_context(
-            list(self.history), goal, self.limit - self.step, completion.config
-        )
-        count = min(self.config.stages, completion.config.queries)
-        if self.mode == "forecast":
-            _, forecast = completion.forecast(context)
-            latents = forecast.numpy()[0, :count]
-        else:
-            routes, _ = completion.propose(
-                context, stream_seed(self.key, self.step), candidates=1
-            )
-            latents = routes[0, 0, :count]
-        decoded = completion.decode(tensor(latents))
-        draws = models.decoder.sample(
-            latents,
-            models.normalize(observation),
-            self.config.region_samples + 1,
-            stream_seed(self.key, self.step, 1),
-        )
-        realizations = models.denormalize(draws[:, -1])
-        chosen = decoded if self.arm.target == "decoded" else realizations
-        offsets = context.offsets[0, :count]
-        stages = [
-            Stage(
-                LatentGoal(
-                    latents[slot].astype(np.float32),
-                    samples=draws[slot, :-1],
-                    realization=chosen[slot].astype(np.float32),
-                ),
-                self.step + int(offsets[slot]),
-            )
-            for slot in range(count)
-        ]
-        # Latent arms are scored at the deterministic decoding of the goal they pursue.
-        targets = decoded if self.arm.executor == "latent" else chosen
-        return stages, {"targets": targets.tolist()}
-
-    def _arrived(self, observation, goal: LatentGoal) -> bool:
-        if self.arm == "oracle" or self.arm.arrival is None:
-            return self.env.arrived(observation, goal.realization)
-        return self.arm.arrival(self.models.normalize(observation), goal)
+    return models, latent_policy, thresholds, diagnostics
 
 
 _WORKER: dict = {}
 
 
-def _start_worker(data_dir, task_name, models, arms, config, limit):
+def _start_worker(data_dir, task_name, models, latent_policy, arms, config, limit):
     torch.set_num_threads(1)
     task = TASKS[task_name]
     dataset, _ = load_dataset(data_dir, task.dataset_id)
     native = dataset.recover_environment(eval_env=True)
+    env, geometry = PointMaze(native, task), MazeGeometry(native.unwrapped.maze)
     _WORKER.update(
-        env=PointMaze(native, task),
-        geometry=MazeGeometry(native.unwrapped.maze),
+        env=env,
         models=models,
         arms=arms,
         config=config,
         limit=limit,
+        controls=Controls(
+            act=track,
+            act_latent=lambda observation, latent: latent_policy.act(
+                models.normalize(observation), latent
+            ),
+            terminal=track,
+            arrived=env.arrived,
+            oracle=lambda observation, goal: geometry.waypoint(
+                observation, goal, config.oracle_cells, config.oracle_speed
+            ),
+            check=lambda observation, target, goal: {
+                "in_wall": not geometry.free(target),
+                "progress": geometry.progress(observation, target, goal),
+            },
+        ),
     )
 
 
-def _play(episodes: list[Episode]) -> list[dict]:
-    env, geometry = _WORKER["env"], _WORKER["geometry"]
+def _play(batch: list[Episode]) -> list[dict]:
+    env, models, config = _WORKER["env"], _WORKER["models"], _WORKER["config"]
     rows = []
-    for episode in episodes:
-        arm = {"direct": None, "oracle": "oracle"}.get(episode.arm)
-        arm = arm or _WORKER["arms"].get(episode.arm)
-        seed_key = stream_seed(
-            _WORKER["models"].completion.config.seed,
-            episode.seed,
-            MODES.index(episode.mode),
-            episode.repeat,
-        )
+    for episode in batch:
         policy = ClosedLoop(
-            env,
-            geometry,
-            _WORKER["models"],
-            arm,
+            models,
+            _WORKER["controls"],
+            _WORKER["arms"].get(episode.arm, episode.arm),
             episode.mode,
-            seed_key,
+            episode_key(models, episode),
             _WORKER["limit"],
-            _WORKER["config"],
+            stages=config.stages,
+            region_samples=config.region_samples,
+            action_size=ACTION_SIZE,
         )
         outcome, _ = rollout(env, episode.seed, _WORKER["limit"], policy)
-        events = policy.goals.events if policy.goals is not None else []
-        flags = [
-            (wall, progress)
-            for plan in policy.plans
-            for wall, progress in zip(plan["in_wall"], plan["progress"], strict=True)
-        ]
         rows.append(
-            {
-                **asdict(episode),
-                "success": outcome["success"],
-                "first_success_step": outcome["first_success_step"],
-                "steps": outcome["steps"],
-                "plans": len(policy.plans),
-                "stages": len(events),
-                "arrivals": sum(event.outcome == "arrived" for event in events),
-                "targets_in_wall": sum(wall for wall, _ in flags),
-                "targets_with_progress": sum(progress for _, progress in flags),
-                "targets": len(flags),
-                "first_plan": policy.plans[0] if policy.plans else None,
-            }
+            record(
+                episode,
+                policy,
+                outcome["success"],
+                outcome["steps"],
+                outcome["first_success_step"],
+            )
         )
     return rows
-
-
-def _episodes(arms, seeds, config) -> list[Episode]:
-    episodes = [Episode("direct", "forecast", seed) for seed in seeds]
-    episodes += [Episode("oracle", "forecast", seed) for seed in seeds]
-    for name in arms:
-        for seed in seeds:
-            episodes.append(Episode(name, "forecast", seed))
-            episodes += [
-                Episode(name, "sample", seed, repeat)
-                for repeat in range(config.sample_repeats)
-            ]
-    return episodes
-
-
-def _label(row) -> str:
-    return (
-        row["arm"]
-        if row["arm"] in ("direct", "oracle")
-        else f"{row['arm']}/{row['mode']}"
-    )
-
-
-def _summarize(rows: list[dict], seeds: list[int]) -> dict:
-    """Average repeats within each start, then compare arms paired by start."""
-    by_arm: dict[str, dict[int, list[dict]]] = {}
-    for row in rows:
-        by_arm.setdefault(_label(row), {}).setdefault(row["seed"], []).append(row)
-    draws = np.random.default_rng(20).integers(len(seeds), size=(2000, len(seeds)))
-
-    def per_start(label):
-        return np.array(
-            [np.mean([r["success"] for r in by_arm[label][seed]]) for seed in seeds]
-        )
-
-    def ratio(trials, numerator, denominator):
-        total = sum(t[denominator] for t in trials)
-        return sum(t[numerator] for t in trials) / total if total else None
-
-    direct, oracle = per_start("direct"), per_start("oracle")
-    arms = {}
-    for label, starts in by_arm.items():
-        trials = [trial for seed in seeds for trial in starts[seed]]
-        success = per_start(label)
-        arrival_steps = [t["first_success_step"] for t in trials if t["success"]]
-        summary = {
-            "success": float(success.mean()),
-            "mean_first_success_step": float(np.mean(arrival_steps))
-            if arrival_steps
-            else None,
-            "plans_per_episode": float(np.mean([t["plans"] for t in trials])),
-            "stage_arrival": ratio(trials, "arrivals", "stages"),
-            "targets_in_wall": ratio(trials, "targets_in_wall", "targets"),
-            "targets_with_progress": ratio(trials, "targets_with_progress", "targets"),
-        }
-        comparisons = {"direct": direct} if label != "direct" else {}
-        if "/" in label and not label.startswith("point_native/"):
-            comparisons["point_native"] = per_start(
-                "point_native/" + label.split("/")[-1]
-            )
-        for name, baseline in comparisons.items():
-            delta = success - baseline
-            summary[f"difference_from_{name}"] = float(delta.mean())
-            summary[f"difference_from_{name}_bootstrap_95"] = np.quantile(
-                delta[draws].mean(axis=1), (0.025, 0.975)
-            ).tolist()
-        if label not in ("direct", "oracle"):
-            gap = oracle.mean() - direct.mean()
-            summary["share_of_oracle_gap"] = (
-                float((success.mean() - direct.mean()) / gap) if gap > 0 else None
-            )
-        arms[label] = summary
-    return {"starts": len(seeds), "arms": arms}
 
 
 def run(
@@ -519,7 +287,7 @@ def run(
         raise ValueError("Dataset files disagree with the frozen run")
     train, validation, _ = split_trajectories(dataset)
     out.mkdir(parents=True, exist_ok=False)
-    models, thresholds, diagnostics = _fit(
+    models, latent_policy, thresholds, diagnostics = _fit(
         frozen, train, validation, limit, config, out
     )
     arms = shared.arms(
@@ -568,13 +336,23 @@ def run(
             ).hexdigest(),
         },
     )
-    episodes = _episodes(arms, seeds, config)
-    shards = [episodes[index::workers] for index in range(workers)]
+    planned = episodes(
+        list(arms), seeds, sample_repeats=config.sample_repeats, bounds=(DIRECT, ORACLE)
+    )
+    shards = [planned[index::workers] for index in range(workers)]
     with ProcessPoolExecutor(
         len(shards),
         mp_context=get_context("spawn"),
         initializer=_start_worker,
-        initargs=(data_dir, manifest["task"], models, arms, config, limit),
+        initargs=(
+            data_dir,
+            manifest["task"],
+            models,
+            latent_policy,
+            arms,
+            config,
+            limit,
+        ),
     ) as pool:
         rows = [row for shard in pool.map(_play, shards) for row in shard]
     rows.sort(key=lambda row: (row["arm"], row["mode"], row["seed"], row["repeat"]))
@@ -584,7 +362,7 @@ def run(
     summary = {
         **diagnostics,
         "evaluation_environment_steps": sum(row["steps"] for row in rows),
-        **_summarize(rows, seeds),
+        **summarize(rows),
     }
     write_json(out / "summary.json", summary)
     return summary

@@ -23,7 +23,7 @@ The `src/worth_reaching/` package groups code by responsibility.
 | `data/` | Represent public completion examples and masked trajectory windows, read shared OGBench archives and record experiment artifacts |
 | `models/` | Encode observations, predict masked latent positions and sample residual trajectories |
 | `models/training.py` | Configure Lightning trainers, step-indexed batches, checkpoints and logs |
-| `evaluation/` | Shared-bank selector comparison and Scene evaluation and reachability |
+| `evaluation/` | Shared-bank selector comparison, region calibration and arms, the closed-loop goal pursuit shared by Maze2D and Scene, and Scene evaluation and reachability |
 | `cli.py` | Connect configurations to training and evaluation commands |
 | `tasks/pointmaze/` | Own the Maze2D task specifications, dataset and simulator adapters, controller, experiment commands and paired probes |
 | `tasks/dependency_grid/` | Define switchable goals with ordered prerequisites, collect public trajectories, and evaluate declared or learned targets through paired execution |
