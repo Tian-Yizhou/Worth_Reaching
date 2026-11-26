@@ -81,8 +81,31 @@ def _effector_match(observation: np.ndarray, goal: np.ndarray) -> np.ndarray:
     return distance <= 10 * ARRIVAL_METERS
 
 
-def _arrived(observations: np.ndarray, goal: np.ndarray) -> np.ndarray:
+def arrived(observations: np.ndarray, goal: np.ndarray) -> np.ndarray:
+    """The official scene predicate plus an end effector within 4 cm of the goal."""
     return _scene_match(observations, goal) & _effector_match(observations, goal)
+
+
+def snap_buttons(target: np.ndarray) -> np.ndarray:
+    """Project a decoded target's button states onto the nearest one-hot state."""
+    snapped = np.array(target, dtype=np.float32, copy=True)
+    for pair in (BUTTON_STATES[:2], BUTTON_STATES[2:]):
+        on = int(np.argmax(snapped[pair]))
+        snapped[pair] = np.eye(2, dtype=np.float32)[on]
+    return snapped
+
+
+def matched_parts(observation: np.ndarray, goal: np.ndarray) -> int:
+    """How many of the cube, drawer, window and two buttons already match the goal."""
+    cube = np.linalg.norm(observation[CUBE] - goal[CUBE]) <= 10 * ARRIVAL_METERS
+    slides = np.abs(observation[SLIDES] - goal[SLIDES]) <= np.array([18, 15]) * (
+        ARRIVAL_METERS
+    )
+    buttons = [
+        np.array_equal(observation[pair], goal[pair])
+        for pair in (BUTTON_STATES[:2], BUTTON_STATES[2:])
+    ]
+    return int(cube) + int(slides.sum()) + sum(buttons)
 
 
 def _arrival(path, goal, matches: Arrival, hold: int) -> tuple[int | None, bool]:
@@ -363,7 +386,7 @@ def run(
             "hold_frames": hold,
         }
     else:
-        sample, matches, hold = _waypoints, _arrived, 1
+        sample, matches, hold = _waypoints, arrived, 1
         strata = ("scene_change", "pose_only")
         arrival_rule = {
             "radius_meters": ARRIVAL_METERS,

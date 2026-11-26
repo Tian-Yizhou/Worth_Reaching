@@ -345,6 +345,20 @@ uv run --no-sync wr scene-executor --seed 7 --updates 1000000 \
 
 The executor tracks the official goal observation from each seeded reset until the native success event or 750 actions. `summary.json` reports success by task and the value at goals 1, 10, 50 and 200 steps ahead in validation trajectories. One update takes about 17 ms on an RTX 2080 Ti, so a million updates take about five hours.
 
+
+### Compare region goals with point goals in Scene
+
+This is closed-loop E1 on official Tasks 4 and 5. A qualified `scene-executor` run supplies the GCIVL executor, which pursues observation targets and the terminal goal. `scene-regions` trains a latent completion model with the span set to the 750-action limit, a region decoder on 20,000 training windows, and a latent-goal GCIVL whose goals are frozen encodings of archive observations. Arrival thresholds are calibrated to equal recall on validation windows, as in Maze2D. [Maze2D version](#compare-region-goals-with-point-goals-in-maze2d)
+
+```bash
+uv run --no-sync wr scene-regions --executor "$executor_run" --out "$run_dir/regions" \
+  --config configs/scene/completion-scaled.toml --region-updates 20000 \
+  --region-width 512 --region-batch-size 512 --eval-workers 48
+```
+
+The arms and modes match Maze2D. The observation arms hand decoded states or region realizations to the frozen executor. The latent arms hand `z` to the latent-goal executor. Native arrival at a declared target applies the official scene predicate and a 4 cm end-effector match after projecting the target's button states onto one-hot values. Scene has no privileged path planner, so direct execution is the only bound. A target makes progress when more of the cube, drawer, window and two buttons match the goal in the target than in the current observation. Region supports are log densities, which avoids underflow in the 40-feature observation and leaves quantile-calibrated decisions unchanged.
+
+`--models` reuses the world model, decoder and latent executor of an earlier run with the same recipe, so evaluation settings can change without retraining. `summary.json` reports every arm overall and by task. A smoke run uses `--config configs/pointmaze/completion-smoke.toml --latent-updates 2 --region-updates 2 --decoder-windows 8 --eval-repeats 1 --sample-repeats 1`.
 ### Compare native CPU and batched CUDA Scene evaluation
 
 `scene-evaluate` loads a completed `scene-latent` run and evaluates the frozen controller and planner. Use the same checkpoint, tasks, split, seeds and budgets for both backends. On Linux x86-64, add `--extra scene-warp` to the Scene install for CUDA physics.

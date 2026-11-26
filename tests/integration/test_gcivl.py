@@ -1,3 +1,4 @@
+import gzip
 import json
 import subprocess
 
@@ -44,6 +45,12 @@ def test_gcivl_batches_label_goals_within_trajectories(tmp_path):
     final = torch.where(rows < 14, torch.tensor(14), torch.tensor(29))
     goals = actor_goal[:, 0].long()
     assert bool(((goals > rows) & (goals <= final)).all())
+
+    # Goal features replace observations as goals, row for row.
+    features = np.arange(30, dtype=np.float32)[:, None] * [2.0, -1.0]
+    goals = GCIVLBatches(archive, config, (3,), features)(0)
+    np.testing.assert_array_equal(goals[3][:, 0], 2 * batch[3][:, 0])
+    np.testing.assert_array_equal(goals[4][:, 1], -batch[4][:, 0])
 
     model = GCIVL(40, 40, 5, config)
     target = [value.clone() for value in model.target.parameters()]
@@ -92,3 +99,93 @@ def test_scene_executor_cli_trains_and_scores_official_tasks(tmp_path):
     assert (episode["task"], episode["seed"]) == (2, 43001)
     summary = json.loads((out / "summary.json").read_text())
     assert set(summary["per_task"]) == {"2"}
+
+    regions = tmp_path / "regions"
+    subprocess.run(
+        [
+            "wr",
+            "scene-regions",
+            "--executor",
+            out,
+            "--data-dir",
+            tmp_path,
+            "--out",
+            regions,
+            "--config",
+            "configs/pointmaze/completion-smoke.toml",
+            "--latent-updates",
+            "2",
+            "--latent-batch-size",
+            "16",
+            "--region-updates",
+            "2",
+            "--decoder-windows",
+            "8",
+            "--task",
+            "2",
+            "--eval-repeats",
+            "1",
+            "--sample-repeats",
+            "1",
+            "--recall-levels",
+            "0.75",
+            "--region-samples",
+            "4",
+            "--eval-workers",
+            "2",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    manifest = json.loads((regions / "manifest.json").read_text())
+    assert manifest["evaluation"]["tasks"] == [2]
+    assert manifest["regions"]["completion"]["max_horizon"] == 750
+    summary = json.loads((regions / "summary.json").read_text())
+    assert summary["starts"] == 1 and set(summary["per_task"]) == {"2"}
+    assert "oracle" not in summary["arms"]
+    assert "progress" in summary["arms"]["point_native/forecast"]["target_checks"]
+    with gzip.open(regions / "attempts.jsonl.gz", "rt") as stream:
+        attempts = [json.loads(line) for line in stream]
+    assert len(attempts) == 1 + 2 * len(manifest["arms"])
+
+    reused = tmp_path / "reused"
+    subprocess.run(
+        [
+            "wr",
+            "scene-regions",
+            "--executor",
+            out,
+            "--models",
+            regions,
+            "--data-dir",
+            tmp_path,
+            "--out",
+            reused,
+            "--config",
+            "configs/pointmaze/completion-smoke.toml",
+            "--latent-updates",
+            "2",
+            "--latent-batch-size",
+            "16",
+            "--region-updates",
+            "2",
+            "--decoder-windows",
+            "8",
+            "--task",
+            "2",
+            "--eval-repeats",
+            "1",
+            "--sample-repeats",
+            "1",
+            "--recall-levels",
+            "0.75",
+            "--region-samples",
+            "4",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    reused_manifest = json.loads((reused / "manifest.json").read_text())
+    assert reused_manifest["weights_sha256"] == manifest["weights_sha256"]

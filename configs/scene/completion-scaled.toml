@@ -1,0 +1,15 @@
+# Scaled Scene world model for closed-loop E1, matching the scaled Maze2D recipe.
+# scene-regions sets the prediction span to the 750-action limit.
+[model]
+windows = 200000
+batch_size = 512
+width = 512
+latent_size = 32
+codec_updates = 20000
+predictor_updates = 100000
+predictor_val_every = 1000
+predictor_patience = 20
+flow_updates = 100000
+flow_width = 512
+flow_batch_size = 512
+learning_rate = 0.0003
