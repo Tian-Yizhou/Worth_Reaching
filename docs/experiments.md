@@ -80,7 +80,9 @@ This is experiment E1. It trains the dependency-grid world model as above, then 
 ```bash
 uv sync --locked --extra training-cpu
 run_dir="$(mktemp -d results/dependency-grid-regions-dev.XXXXXX)"
-uv run --no-sync wr dependency-grid-regions --seed 7 --out "$run_dir/seed-7"
+for seed in 7 19 31 43 59; do
+  uv run --no-sync wr dependency-grid-regions --seed "$seed" --out "$run_dir/seed-$seed"
+done
 ```
 
 | Arm | Executor and goal | Arrival |
@@ -91,10 +93,14 @@ uv run --no-sync wr dependency-grid-regions --seed 7 --out "$run_dir/seed-7"
 | `region_gaussian@r` | Latent-conditioned executor on `z` | Support under a diagonal Gaussian matched to the region samples at least κ |
 | `region_flow@r` | Latent-conditioned executor on `z` | Kernel support under region decoder samples at least κ |
 | `region_decoded@r` | Observation-conditioned executor on one decoder sample per repeat | Kernel support under region decoder samples at least κ |
+| `sample_cell` | Observation-conditioned executor on one decoder sample per repeat | Exact cell of the sample |
+| `decoded_support@r` | Observation-conditioned executor on the decoded observation | Kernel support under region decoder samples at least κ |
 
 The region decoder is a conditional flow trained on latents interpolated between the world model's prediction and the encoding of the realized state, so the forecast decodes to a wide region and a flow sample to a narrow one. It also conditions on the decision-time observation and generates the change from it, so the fixed layout decodes exactly. Both executors share an architecture and are trained by behavior cloning on hindsight goals within eight steps of each demonstrated action. The latent executor receives encoded goals. The kernel bandwidth and Gaussian floor are half a cell.
 
-Each arrival rule's threshold is calibrated on development windows so that it accepts a fixed share `r` of realized states, set by `--recall-levels` (default 0.25, 0.5 and 0.75). Rules are therefore compared at equal recall. `summary.json` records each threshold and its false arrival rate on mismatched development states.
+Each arrival rule's threshold is calibrated on development windows so that it accepts a fixed share `r` of realized states, set by `--recall-levels` (default 0.25, 0.5, 0.75, 0.9 and 0.95). Rules are therefore compared at equal recall. `summary.json` records each threshold and its false arrival rate on mismatched development states. `sample_cell` and `decoded_support` separate the target from the arrival rule: together with `point_learned` and `region_decoded` they cross a decoded or sampled target with exact-cell or region-support arrival under the same executor.
+
+The coherence diagnostic draws `--coherence-realizations` samples from each flow region, attempts each as a fixed point goal on the evaluation slip draws, and reports the variance of value within regions, between regions of the same start, and the binomial noise of the repeats. A coherent region has realizations of similar value.
 
 `candidate-bank.json` and `candidate-regions.npz` record every candidate's latents, decoded observations, point targets, region samples and per-repeat realizations before any attempt. `region-weights.pt` stores the decoder, the Gaussian scale and both executors. `summary.json` reports, for each arm and depth, terminal success, arrival, success after a miss and attempt length for the forecast, the uniform average over flow candidates and the candidate selected on independent reference repeats. Paired differences from `point_learned` carry layout-bootstrap intervals. It also reports executor accuracy on development demonstrations. For a smoke run, append `--layouts 1 --demonstrations 1 --encoder-updates 2 --updates 2 --flow-updates 2 --region-updates 2 --executor-updates 2 --repeats 2 --candidates 2`.
 

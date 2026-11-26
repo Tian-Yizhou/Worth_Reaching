@@ -56,10 +56,12 @@ BANDWIDTH = 0.5 / (grid.SIZE - 1)
 
 @dataclass(frozen=True, slots=True)
 class SweepConfig:
-    recall_levels: tuple[float, ...] = (0.25, 0.5, 0.75)
+    recall_levels: tuple[float, ...] = (0.25, 0.5, 0.75, 0.9, 0.95)
     """Fractions of realized development states each arrival rule must accept."""
     region_samples: int = 32
     calibration_windows: int = 128
+    coherence_realizations: int = 4
+    """Realizations per flow candidate attempted as point goals for region coherence."""
 
     def __post_init__(self) -> None:
         if (
@@ -67,9 +69,11 @@ class SweepConfig:
             or not all(0 < level < 1 for level in self.recall_levels)
             or self.region_samples < 2
             or self.calibration_windows < 2
+            or self.coherence_realizations < 2
         ):
             raise ValueError(
-                "Use recall levels in (0, 1), two or more region samples and calibration windows"
+                "Use recall levels in (0, 1) and at least two region samples, "
+                "calibration windows and coherence realizations"
             )
 
 
@@ -250,6 +254,7 @@ def _declare(
     candidates: int,
     repeats: int,
     region_samples: int,
+    coherence_realizations: int,
 ):
     completion = models.completion
     public = dataset.public_input(layout, depth, goal)
@@ -276,6 +281,12 @@ def _declare(
     realizations = models.decoder.sample(
         pool, reset, repeats, stream_seed(completion.config.seed, seed, 2)
     ).reshape(len(pool), depth, repeats, -1)
+    coherence = models.decoder.sample(
+        pool,
+        reset,
+        coherence_realizations,
+        stream_seed(completion.config.seed, seed, 3),
+    ).reshape(len(pool), depth, coherence_realizations, -1)
     return {
         "layout_id": layout.id,
         "depth": depth,
@@ -290,119 +301,140 @@ def _declare(
             }
             for index in range(len(pool))
         ],
-    }, {"samples": samples, "realizations": realizations}
+    }, {"samples": samples, "realizations": realizations, "coherence": coherence}
+
+
+@dataclass(frozen=True, slots=True)
+class Arm:
+    executor: str
+    """bfs, observation or latent."""
+    target: str
+    """decoded (deterministic decoding of z), sample (one region realization per
+    repeat) or latent (z itself)."""
+    arrival: object = None
+    """A latent arrival rule, or None to require the target's exact cell."""
 
 
 def _arm_specs(models: Models, sweep: SweepConfig, thresholds: dict) -> dict:
-    """Name each arm by its executor, goal form and recall-calibrated arrival rule."""
+    """Name each arm by its executor, target and recall-calibrated arrival rule."""
 
     def encode(observation):
         return models.completion.encode(observation[None]).numpy()[0]
 
     arms = {
-        "point_bfs": ("bfs", "cell", None),
-        "point_learned": ("observation", "cell", None),
+        "point_bfs": Arm("bfs", "decoded"),
+        "point_learned": Arm("observation", "decoded"),
+        "sample_cell": Arm("observation", "sample"),
     }
     for level in sweep.recall_levels:
         tag = f"@{level:g}"
-        radius = -thresholds["latent_point", level]
-        arms["latent_point" + tag] = (
-            "latent",
-            "latent",
-            EncoderConsistency(encode, radius),
-        )
-        arms["region_gaussian" + tag] = (
-            "latent",
-            "latent",
-            GaussianSupport(BANDWIDTH, thresholds["region_gaussian", level]),
-        )
+        consistency = EncoderConsistency(encode, -thresholds["latent_point", level])
+        gaussian = GaussianSupport(BANDWIDTH, thresholds["region_gaussian", level])
         support = RegionSupport(BANDWIDTH, thresholds["region_flow", level])
-        arms["region_flow" + tag] = ("latent", "latent", support)
-        arms["region_decoded" + tag] = ("observation", "realization", support)
+        arms["latent_point" + tag] = Arm("latent", "latent", consistency)
+        arms["region_gaussian" + tag] = Arm("latent", "latent", gaussian)
+        arms["region_flow" + tag] = Arm("latent", "latent", support)
+        arms["region_decoded" + tag] = Arm("observation", "sample", support)
+        arms["decoded_support" + tag] = Arm("observation", "decoded", support)
     return arms
+
+
+def _describe(rule) -> dict:
+    if rule is None:
+        return {"rule": "exact_cell"}
+    if isinstance(rule, EncoderConsistency):
+        return {"rule": "encoder_consistency", "radius": rule.epsilon}
+    return {
+        "rule": type(rule).__name__,
+        "bandwidth": BANDWIDTH,
+        "threshold": rule.threshold,
+    }
+
+
+def _stages(arm: Arm, layout, terminal, candidate, samples, realizations, repeat):
+    """Declare one attempt's stages. Exact-cell arrival keeps the valid cell prefix."""
+    depth = len(candidate["latents"])
+    deadlines = experiment.DEADLINES
+    if arm.target == "sample":
+        vectors = realizations[:, repeat]
+    elif arm.target == "decoded":
+        vectors = np.asarray(candidate["decoded"], np.float32)
+    else:
+        vectors = np.asarray(candidate["latents"], np.float32)
+    goals = [
+        LatentGoal(
+            np.asarray(candidate["latents"][slot], np.float32),
+            samples=None if samples is None else samples[slot],
+            realization=vectors[slot],
+        )
+        for slot in range(depth)
+    ]
+    if arm.arrival is not None:
+        return [Stage(goals[slot], deadlines[slot]) for slot in range(depth)]
+    cells = latent.decode_prefix(np.asarray(vectors), layout, terminal)
+    return [
+        Stage((cell, goals[slot]), deadlines[slot]) for slot, cell in enumerate(cells)
+    ]
+
+
+def _attempt(models, arm: Arm, layout, depth, terminal, stages, slips):
+    def observe(state):
+        return dataset.observe(layout, depth, state)
+
+    if arm.executor == "bfs":
+        targets = tuple(stage.target[0] for stage in stages)
+        return experiment.attempt(layout, depth, terminal, targets, slips)
+    policy = (
+        models.latent_policy if arm.executor == "latent" else models.observation_policy
+    )
+    capped = [Stage(stage.target, min(stage.deadline, len(slips))) for stage in stages]
+    if arm.arrival is None:
+        arrived = lambda state, target: state.position == target[0]  # noqa: E731
+        goal_of = lambda target: target[1]  # noqa: E731
+    else:
+        arrived = lambda state, target: arm.arrival(observe(state), target)  # noqa: E731
+        goal_of = lambda target: target  # noqa: E731
+    return experiment.pursue(
+        layout,
+        depth,
+        terminal,
+        capped,
+        arrived,
+        lambda state, target: policy.act(observe(state), goal_of(target).realization),
+        slips,
+    )
 
 
 def _attempts(models, arms, layout, row, regions, slips_by_stream):
     depth, terminal = row["depth"], tuple(row["terminal"])
-
-    def observe(state):
-        return dataset.observe(layout, depth, state)
-
-    def act_with(policy):
-        return lambda state, target: policy.act(observe(state), target_input(target))
-
-    def target_input(target):
-        if isinstance(target, LatentGoal):
-            return target.latent if target.realization is None else target.realization
-        return target
-
     results = {}
-    for name, (executor, form, rule) in arms.items():
+    for name, arm in arms.items():
         per_stream = {}
         for stream, repeats in slips_by_stream.items():
             per_candidate = []
             for index, candidate in enumerate(row["candidates"]):
-                trials = []
-                for repeat, slips in enumerate(repeats):
-                    deadlines = [min(d, len(slips)) for d in experiment.DEADLINES]
-                    if form == "cell":
-                        targets = candidate["point_targets"]
-                        if executor == "bfs":
-                            trial = experiment.attempt(
-                                layout, depth, terminal, targets, slips
-                            )
-                        else:
-                            stages = [
-                                Stage((cell, np.asarray(observation)), deadline)
-                                for cell, observation, deadline in zip(
-                                    targets, candidate["decoded"], deadlines
-                                )
-                            ]
-                            trial = experiment.pursue(
-                                layout,
-                                depth,
-                                terminal,
-                                stages,
-                                lambda state, target: state.position == target[0],
-                                lambda state, target: models.observation_policy.act(
-                                    observe(state), target[1]
-                                ),
-                                slips,
-                            )
-                    else:
-                        stages = [
-                            Stage(
-                                LatentGoal(
-                                    np.asarray(candidate["latents"][slot], np.float32),
-                                    samples=regions["samples"][index, slot],
-                                    realization=(
-                                        regions["realizations"][index, slot, repeat]
-                                        if form == "realization"
-                                        else None
-                                    ),
-                                ),
-                                deadlines[slot],
-                            )
-                            for slot in range(depth)
-                        ]
-                        policy = (
-                            models.latent_policy
-                            if executor == "latent"
-                            else models.observation_policy
-                        )
-                        trial = experiment.pursue(
+                per_candidate.append(
+                    [
+                        _attempt(
+                            models,
+                            arm,
                             layout,
                             depth,
                             terminal,
-                            stages,
-                            lambda state, target, rule=rule: rule(
-                                observe(state), target
+                            _stages(
+                                arm,
+                                layout,
+                                terminal,
+                                candidate,
+                                regions["samples"][index],
+                                regions["realizations"][index],
+                                repeat,
                             ),
-                            act_with(policy),
                             slips,
                         )
-                    trials.append(trial)
-                per_candidate.append(trials)
+                        for repeat, slips in enumerate(repeats)
+                    ]
+                )
             per_stream[stream] = per_candidate
         results[name] = per_stream
     return results
@@ -419,6 +451,37 @@ def _rates(trials) -> dict:
         / count,
         "attempt_steps": float(np.mean([trial.attempt_steps for trial in trials])),
     }
+
+
+def _coherence(models, layout, row, regions, repeats) -> tuple[dict, int]:
+    """Attempt several realizations of each flow region as fixed point goals.
+
+    A coherent region has realizations of similar value. Compare the spread of value
+    within each region with the spread between regions of the same start, and with
+    the binomial noise of a finite number of repeats.
+    """
+    depth, terminal = row["depth"], tuple(row["terminal"])
+    arm = Arm("observation", "sample")
+    values, steps = [], 0
+    for index, candidate in enumerate(row["candidates"][1:], start=1):
+        draws = regions["coherence"][index]
+        region = []
+        for realization in range(draws.shape[1]):
+            stages = _stages(arm, layout, terminal, candidate, None, draws, realization)
+            trials = [
+                _attempt(models, arm, layout, depth, terminal, stages, slips)
+                for slips in repeats
+            ]
+            steps += sum(trial.environment_steps for trial in trials)
+            region.append(np.mean([trial.success for trial in trials]))
+        values.append(region)
+    values = np.asarray(values)
+    return {
+        "values": values.tolist(),
+        "within_region_variance": float(values.var(axis=1).mean()),
+        "between_region_variance": float(values.mean(axis=1).var()),
+        "binomial_noise_variance": float((values * (1 - values)).mean() / len(repeats)),
+    }, steps
 
 
 def _evaluate(models, arms, layout, row, regions, config) -> dict:
@@ -451,13 +514,18 @@ def _evaluate(models, arms, layout, row, regions, config) -> dict:
         reference_steps += sum(
             t.environment_steps for trials in reference for t in trials
         )
+    coherence, coherence_steps = _coherence(
+        models, layout, row, regions, slips["evaluation"]
+    )
     return {
         "layout_id": layout.id,
         "depth": depth,
         "goal": row["goal"],
         "arms": scored,
+        "coherence": coherence,
         "evaluation_steps": steps,
         "reference_steps": reference_steps,
+        "coherence_steps": coherence_steps,
     }
 
 
@@ -494,7 +562,18 @@ def _summarize(outcomes: list[dict]) -> dict:
                 delta = column(name) - column(baseline)
                 arms[name]["paired_difference_from_point_learned"] = float(delta.mean())
                 arms[name]["layout_bootstrap_95"] = interval(delta)
-        summary[str(depth)] = {"cases": len(rows), "arms": arms}
+        summary[str(depth)] = {
+            "cases": len(rows),
+            "arms": arms,
+            "coherence": {
+                key: float(np.mean([row["coherence"][key] for row in rows]))
+                for key in (
+                    "within_region_variance",
+                    "between_region_variance",
+                    "binomial_noise_variance",
+                )
+            },
+        }
     return summary
 
 
@@ -543,11 +622,13 @@ def run(
             candidates=evaluation.candidates,
             repeats=evaluation.repeats,
             region_samples=config.sweep.region_samples,
+            coherence_realizations=config.sweep.coherence_realizations,
         )
         declared.append((layout, row, regions))
         key = f"{layout.id}:{depth}:{goal}"
         region_arrays[f"{key}:samples"] = regions["samples"]
         region_arrays[f"{key}:realizations"] = regions["realizations"]
+        region_arrays[f"{key}:coherence"] = regions["coherence"]
     bank_path = out / "candidate-bank.json"
     write_json(bank_path, [row for _, row, _ in declared])
     regions_path = out / "candidate-regions.npz"
@@ -566,8 +647,12 @@ def run(
             "evaluation": asdict(evaluation),
             "regions": asdict(config),
             "arms": {
-                name: {"executor": executor, "goal": form, "arrival": repr(rule)}
-                for name, (executor, form, rule) in arms.items()
+                name: {
+                    "executor": arm.executor,
+                    "target": arm.target,
+                    "arrival": _describe(arm.arrival),
+                }
+                for name, arm in arms.items()
             },
             "kernel_bandwidth": BANDWIDTH,
             "collection_seed": collection_seed,
@@ -599,6 +684,7 @@ def run(
             row["evaluation_steps"] for row in outcomes
         ),
         "reference_environment_steps": sum(row["reference_steps"] for row in outcomes),
+        "coherence_environment_steps": sum(row["coherence_steps"] for row in outcomes),
         **diagnostics,
         "by_depth": _summarize(outcomes),
     }

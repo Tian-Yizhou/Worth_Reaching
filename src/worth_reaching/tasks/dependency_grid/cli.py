@@ -77,6 +77,7 @@ def _regions(args: argparse.Namespace) -> dict:
         SweepConfig(
             recall_levels=tuple(args.recall_levels),
             region_samples=args.region_samples,
+            coherence_realizations=args.coherence_realizations,
         ),
     )
     return run(
@@ -166,8 +167,14 @@ def register_commands(commands) -> None:
         "--recall-levels",
         type=float,
         nargs="+",
-        default=[0.25, 0.5, 0.75],
+        default=[0.25, 0.5, 0.75, 0.9, 0.95],
         help="Share of realized dev states each arrival rule accepts",
+    )
+    regions.add_argument(
+        "--coherence-realizations",
+        type=int,
+        default=4,
+        help="Realizations per flow region attempted as point goals",
     )
     regions.add_argument("--region-samples", type=int, default=32)
     regions.add_argument("--collection-seed", type=int, default=7)

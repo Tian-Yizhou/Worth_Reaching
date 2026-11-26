@@ -91,6 +91,8 @@ def test_regions_cli_declares_regions_before_matched_attempts(tmp_path):
             "3",
             "--recall-levels",
             "0.5",
+            "--coherence-realizations",
+            "2",
         ],
         check=True,
         capture_output=True,
@@ -100,6 +102,8 @@ def test_regions_cli_declares_regions_before_matched_attempts(tmp_path):
     assert set(manifest["arms"]) == {
         "point_bfs",
         "point_learned",
+        "sample_cell",
+        "decoded_support@0.5",
         "latent_point@0.5",
         "region_gaussian@0.5",
         "region_flow@0.5",
@@ -120,6 +124,7 @@ def test_regions_cli_declares_regions_before_matched_attempts(tmp_path):
         key = f"{bank[0]['layout_id']}:{bank[0]['depth']}:{bank[0]['goal']}"
         assert regions[f"{key}:samples"].shape == (3, bank[0]["depth"], 3, 15)
         assert regions[f"{key}:realizations"].shape == (3, bank[0]["depth"], 2, 15)
+        assert regions[f"{key}:coherence"].shape == (3, bank[0]["depth"], 2, 15)
     summary = json.loads((out / "summary.json").read_text())
     for depth in ("1", "2"):
         arms = summary["by_depth"][depth]["arms"]
@@ -129,5 +134,8 @@ def test_regions_cli_declares_regions_before_matched_attempts(tmp_path):
             "region_flow@0.5/reference_best",
         } <= set(arms)
         assert "paired_difference_from_point_learned" in arms["region_flow@0.5/uniform"]
+    coherence = summary["by_depth"]["2"]["coherence"]
+    assert coherence["within_region_variance"] >= 0
     rows = [json.loads(line) for line in (out / "attempts.jsonl").open()]
+    assert all(np.asarray(row["coherence"]["values"]).shape == (2, 2) for row in rows)
     assert all(row["arms"]["direct"]["arrival"] == 0 for row in rows)
