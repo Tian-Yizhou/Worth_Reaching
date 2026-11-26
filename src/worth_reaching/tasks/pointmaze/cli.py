@@ -44,6 +44,33 @@ def _pointmaze_latent_energy(args: argparse.Namespace) -> dict[str, object]:
     )
 
 
+def _pointmaze_regions(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.models.executor import ExecutorConfig
+    from worth_reaching.models.region import RegionConfig
+    from worth_reaching.tasks.pointmaze.regions import MazeRegionConfig, run
+
+    config = MazeRegionConfig(
+        region=RegionConfig(updates=args.region_updates),
+        executor=ExecutorConfig(
+            updates=args.executor_updates, width=256, batch_size=256
+        ),
+        recall_levels=tuple(args.recall_levels),
+        region_samples=args.region_samples,
+        coherence_realizations=args.coherence_realizations,
+        executor_pairs=args.executor_pairs,
+    )
+    return run(
+        args.data_dir,
+        args.checkpoint,
+        args.out,
+        config,
+        split=args.eval_split,
+        repeats=args.eval_repeats,
+        candidates=args.candidates,
+        prefix=args.prefix_length,
+    )
+
+
 def register_commands(commands) -> argparse.ArgumentParser:
     pointmaze = commands.add_parser(
         "pointmaze-latent",
@@ -94,4 +121,31 @@ def register_commands(commands) -> argparse.ArgumentParser:
     latent_energy.add_argument("--candidates", type=int, default=16)
     latent_energy.add_argument("--density-samples", type=int, default=256)
     latent_energy.set_defaults(run=_pointmaze_latent_energy, extra="pointmaze")
+    regions = commands.add_parser(
+        "pointmaze-regions",
+        help="Compare region goals with decoded point goals from a frozen PointMaze run",
+    )
+    regions.add_argument(
+        "--checkpoint",
+        type=Path,
+        required=True,
+        help="Budget directory of a pointmaze-latent run",
+    )
+    regions.add_argument(
+        "--data-dir", type=Path, default=Path("results/datasets/minari")
+    )
+    regions.add_argument("--out", type=Path, required=True)
+    regions.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    regions.add_argument("--eval-repeats", type=int, default=64)
+    regions.add_argument("--candidates", type=int, default=8)
+    regions.add_argument("--prefix-length", type=int, default=1)
+    regions.add_argument("--region-updates", type=int, default=3000)
+    regions.add_argument("--executor-updates", type=int, default=4000)
+    regions.add_argument("--executor-pairs", type=int, default=200_000)
+    regions.add_argument(
+        "--recall-levels", type=float, nargs="+", default=[0.5, 0.75, 0.9]
+    )
+    regions.add_argument("--region-samples", type=int, default=32)
+    regions.add_argument("--coherence-realizations", type=int, default=4)
+    regions.set_defaults(run=_pointmaze_regions, extra="pointmaze")
     return pointmaze

@@ -1,4 +1,4 @@
-"""Goal-conditioned behavior cloning for discrete actions.
+"""Goal-conditioned behavior cloning for discrete or continuous actions.
 
 The same architecture serves two goal forms: an observation to reach, or a latent goal
 z that the policy pursues without knowing what it denotes.
@@ -43,6 +43,41 @@ class GoalPolicy(nn.Module):
         return int(logits.argmax(dim=-1))
 
 
+class ContinuousGoalPolicy(GoalPolicy):
+    """Regress bounded continuous actions toward a goal."""
+
+    @torch.no_grad()
+    def act(self, observation: np.ndarray, goal: np.ndarray) -> np.ndarray:
+        action = self(tensor(observation)[None], tensor(goal)[None])[0]
+        return action.clamp(-1, 1).numpy()
+
+
+def sample_hindsight(
+    observations: np.ndarray,
+    actions: np.ndarray,
+    ends: np.ndarray,
+    size: int,
+    horizon: int,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Sample actions with an observation reached 1 to horizon steps later.
+
+    Episodes are contiguous rows ending at the indices in ends, whose final row carries
+    no action.
+    """
+    begins = np.concatenate(([0], ends[:-1] + 1))
+    lengths = ends - begins
+    eligible = np.flatnonzero(lengths > 0)
+    if not len(eligible):
+        raise ValueError("Executor training needs an episode with an action")
+    episodes = rng.choice(
+        eligible, size=size, p=lengths[eligible] / lengths[eligible].sum()
+    )
+    rows = begins[episodes] + (rng.random(size) * lengths[episodes]).astype(np.int64)
+    later = np.minimum(rows + rng.integers(1, horizon + 1, size), ends[episodes])
+    return observations[rows], observations[later], actions[rows]
+
+
 def hindsight_pairs(
     trajectories: list[tuple[np.ndarray, np.ndarray]], horizon: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -59,6 +94,11 @@ def hindsight_pairs(
     return np.stack(observations), np.stack(goals), np.asarray(actions, np.int64)
 
 
+def _squared_error(model, batch):
+    observation, goal, action = batch
+    return ((model(observation, goal) - action, None),)
+
+
 def _cross_entropy(model, batch):
     observation, goal, action = batch
     loss = F.cross_entropy(model(observation, goal), action.long(), reduction="none")
@@ -70,16 +110,24 @@ def fit_policy(
     observations: np.ndarray,
     goals: np.ndarray,
     actions: np.ndarray,
-    action_count: int,
+    action_count: int | None,
     config: ExecutorConfig,
     *,
     seed: int,
     out: Path,
 ) -> GoalPolicy:
+    """Fit a discrete policy for an action count, or a continuous one for None."""
     torch.manual_seed(seed)
-    model = GoalPolicy(
-        observations.shape[-1], goals.shape[-1], action_count, config.width
-    )
+    if action_count is None:
+        model = ContinuousGoalPolicy(
+            observations.shape[-1], goals.shape[-1], actions.shape[-1], config.width
+        )
+        objective = _squared_error
+    else:
+        model = GoalPolicy(
+            observations.shape[-1], goals.shape[-1], action_count, config.width
+        )
+        objective = _cross_entropy
     return train_stage(
         model,
         RandomBatches(
@@ -87,7 +135,7 @@ def fit_policy(
             config.batch_size,
             (seed, 5),
         ),
-        _cross_entropy,
+        objective,
         steps=config.updates,
         learning_rate=config.learning_rate,
         out=out,

@@ -246,3 +246,51 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
             ]
             == 4 * steps
         )
+
+        regions_out = tmp_path / "regions"
+        subprocess.run(
+            [
+                "wr",
+                "pointmaze-regions",
+                "--checkpoint",
+                out,
+                "--data-dir",
+                data_dir,
+                "--out",
+                regions_out,
+                "--eval-repeats",
+                "1",
+                "--candidates",
+                "2",
+                "--region-updates",
+                "2",
+                "--executor-updates",
+                "2",
+                "--executor-pairs",
+                "64",
+                "--recall-levels",
+                "0.75",
+                "--region-samples",
+                "4",
+                "--coherence-realizations",
+                "2",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        manifest = json.loads((regions_out / "manifest.json").read_text())
+        assert manifest["source_weights_sha256"]
+        assert {"point_native", "sample_support@0.75", "region_flow@0.75"} <= set(
+            manifest["arms"]
+        )
+        (row,) = json.loads((regions_out / "candidate-bank.json").read_text())
+        assert row["seed"] == 29001 and len(row["candidates"]) == 3
+        assert row["deadlines"] == [2]
+        regions_summary = json.loads((regions_out / "summary.json").read_text())
+        assert regions_summary["starts"] == 1
+        assert regions_summary["arms"]["direct"]["arrival"] == 0
+        assert (
+            "paired_difference_from_point_native"
+            in regions_summary["arms"]["region_flow@0.75/uniform"]
+        )
