@@ -82,6 +82,23 @@ def _scene_reachability(args: argparse.Namespace) -> dict[str, object]:
     )
 
 
+def _scene_executor(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.scene_executor import run
+    from worth_reaching.models.gcivl import GCIVLConfig
+
+    return run(
+        args.data_dir,
+        args.out,
+        GCIVLConfig(updates=args.updates, batch_size=args.batch_size),
+        seed=args.seed,
+        split=args.eval_split,
+        tasks=tuple(dict.fromkeys(args.task)) if args.task is not None else TASKS,
+        repeats=args.eval_repeats,
+        eval_workers=args.eval_workers,
+        resume=args.resume,
+    )
+
+
 def _scene_evaluate(args: argparse.Namespace) -> dict[str, object]:
     from worth_reaching.evaluation.ogbench_manipulation import evaluate_frozen_scene
 
@@ -189,6 +206,25 @@ def main() -> None:
     evaluate.add_argument("--batch-size", type=int, default=16)
     evaluate.add_argument("--device", default="cuda:0")
     evaluate.set_defaults(run=_scene_evaluate, extra="ogbench")
+    executor = commands.add_parser(
+        "scene-executor",
+        help="Train a GCIVL Scene executor and measure direct success on official tasks",
+    )
+    executor.add_argument(
+        "--data-dir", type=Path, default=Path("results/datasets/ogbench")
+    )
+    executor.add_argument("--out", type=Path, required=True)
+    executor.add_argument("--seed", type=int, default=7)
+    executor.add_argument("--updates", type=int, default=1_000_000)
+    executor.add_argument("--batch-size", type=int, default=1024)
+    executor.add_argument("--task", type=int, choices=TASKS, action="append")
+    executor.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    executor.add_argument("--eval-repeats", type=int, default=10)
+    executor.add_argument("--eval-workers", type=int, default=10)
+    executor.add_argument(
+        "--resume", type=Path, help="Continue from a Lightning executor checkpoint"
+    )
+    executor.set_defaults(run=_scene_executor, extra="ogbench")
     comparison = commands.add_parser(
         "attempt-compare", help="Fit and compare shared-bank selectors"
     )

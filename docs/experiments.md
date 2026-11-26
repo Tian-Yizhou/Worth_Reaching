@@ -330,6 +330,17 @@ Executor training alternates hindsight-goal batches capped at 64 transitions and
 
 The manifest identifies the official train and validation archives by checksum. Offline validation reports action MSE and normalized reconstruction and prediction MSE. The other artifacts contain exact starts, public trajectories with executed actions, sampled plans, weights and paired success by task.
 
+### Qualify a value-based Scene executor
+
+The behavior-cloned executor above reaches no official Scene goal. `scene-executor` trains goal-conditioned implicit V-learning (GCIVL) as in OGBench: two expectile value heads toward `r + γ V̄(s', g)` with `r = 0` at the goal and −1 elsewhere, a Polyak target, and advantage-weighted regression of the actor with temperature 10. Value goals mix the current state, a geometric later state and a random state with probabilities 0.2, 0.5 and 0.3. Actor goals are uniform later states of the same trajectory. The networks use three layer-normalized hidden layers of 512 units and batches of 1024 raw observations. [OGBench GCIVL](https://github.com/seohongpark/ogbench/blob/master/impls/agents/gcivl.py)
+
+```bash
+uv run --no-sync wr scene-executor --seed 7 --updates 1000000 \
+  --eval-repeats 20 --eval-workers 20 --out "$run_dir/executor-7"
+```
+
+The executor tracks the official goal observation from each seeded reset until the native success event or 750 actions. `summary.json` reports success by task and the value at goals 1, 10, 50 and 200 steps ahead in validation trajectories. One update takes about 17 ms on an RTX 2080 Ti, so a million updates take about five hours.
+
 ### Compare native CPU and batched CUDA Scene evaluation
 
 `scene-evaluate` loads a completed `scene-latent` run and evaluates the frozen controller and planner. Use the same checkpoint, tasks, split, seeds and budgets for both backends. On Linux x86-64, add `--extra scene-warp` to the Scene install for CUDA physics.
