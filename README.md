@@ -2,15 +2,16 @@
 
 **Can a world model discover intermediate goals in latent space that substantially improve the probability of final task success?**
 
-Worth Reaching studies this question for long-horizon tasks. Given an observation history, a terminal goal, and a remaining action budget, we use a world model trained on demonstrations to find individual latent goals and sequences of goals worth pursuing. The demonstrations require no hand-labeled subgoals.
+Worth Reaching studies this question for long-horizon tasks. Given an observation history, a terminal goal, and a remaining action budget, we use a world model trained on demonstrations to find individual latent goals and sequences of goals worth pursuing. A latent goal names a region of states defined by a generative decoder, not a single target. The demonstrations require no hand-labeled subgoals.
 
 [Setup](#setup) · [Quick start](#quick-start) · [Architecture](#architecture) · [Experiment guide](docs/experiments.md)
 
 ## Approach
 
 - **Learn latent trajectory completion.** Mask a segment of a demonstration and predict the latent representations of its missing states from the starting history, endpoint condition, and time span.
-- **Discover candidate goals.** Sample multiple latent trajectories with a conditional flow. Decode selected states into targets a controller can pursue. Test whether the frozen model's energy helps identify useful candidates before execution.
-- **Measure contribution to success.** Compare pursuing a candidate with going directly to the terminal goal from matched starts under the same controller and action budget. Measure intermediate-goal arrival and final task success separately.
+- **Treat goals as latent regions.** A conditional generative decoder `p(s | z)` defines which states realize a latent goal `z`. A latent-conditioned executor pursues `z` directly and judges arrival in latent space. The decoder reveals afterwards what the model discovered.
+- **Learn the value of attempting a goal.** Fit a budget-conditioned option value in latent space from attempt outcomes, including recoveries after missed goals, and plan sequences of goals with it.
+- **Measure contribution to success.** Compare pursuing a candidate with going directly to the terminal goal from matched starts under the same executor and action budget. Measure intermediate-goal arrival and final task success separately.
 
 [Research plan](docs/latent-subgoal-research.md) · [Trajectory completion design](docs/trajectory-completion.md) · [Implementation plan](PLAN.md)
 
