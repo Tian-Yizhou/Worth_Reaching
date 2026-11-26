@@ -8,6 +8,7 @@ from platform import python_version
 from random import Random
 
 from worth_reaching.data.artifacts import code_revision, write_json
+from worth_reaching.planning.goals import GoalSequence, Stage
 from worth_reaching.tasks.dependency_grid import environment as grid
 
 BUDGET = 20
@@ -31,33 +32,28 @@ def attempt(
     slips: tuple[bool, ...],
 ) -> Attempt:
     state = grid.State()
+    goals = GoalSequence(
+        [
+            Stage(target, min(deadline, len(slips)))
+            for target, deadline in zip(targets, DEADLINES, strict=False)
+        ],
+        lambda current, target: current.position == target,
+    )
     elapsed = 0
-    arrivals = []
-
-    def pursue(target: grid.Position, deadline: int) -> bool:
-        nonlocal state, elapsed
-        while elapsed < deadline and state.position not in (goal, target):
-            action = (
-                grid.WAIT
-                if slips[elapsed]
-                else grid.track(layout, state.position, target)
-            )
-            state = grid.step(layout, depth, state, action)
-            elapsed += 1
-        return state.position == target
-
-    for index, target in enumerate(targets):
-        deadline = DEADLINES[index]
-        if not pursue(target, min(deadline, len(slips))):
-            break
-        arrivals.append(elapsed)
-    attempt_steps = elapsed
-    success = pursue(goal, len(slips))
+    while elapsed < len(slips) and state.position != goal:
+        stage = goals.advance(state, elapsed)
+        target = goal if stage is None else stage.target
+        action = (
+            grid.WAIT if slips[elapsed] else grid.track(layout, state.position, target)
+        )
+        state = grid.step(layout, depth, state, action)
+        elapsed += 1
+    goals.finish(state, elapsed)
     return Attempt(
-        success,
-        len(arrivals) == len(targets) if targets else None,
-        tuple(arrivals),
-        attempt_steps,
+        state.position == goal,
+        goals.arrived_all if targets else None,
+        tuple(event.end_step for event in goals.arrivals),
+        goals.handoff_step,
         elapsed,
     )
 

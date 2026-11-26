@@ -2,7 +2,7 @@
 
 import json
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from hashlib import file_digest, sha256
 from importlib.metadata import version
 from pathlib import Path
@@ -23,6 +23,7 @@ from worth_reaching.models.training import (
     load_weights,
     stream_seed,
 )
+from worth_reaching.planning.goals import GoalSequence, Stage
 from worth_reaching.planning.receding_goals import completion_context
 from worth_reaching.tasks.pointmaze.dataset import ACTION_SIZE, load_dataset
 from worth_reaching.tasks.pointmaze.environment import SEED_BASE, PointMaze
@@ -139,56 +140,33 @@ def attempt_prefix(
     env: PointMaze, seed: int, limit: int, targets: np.ndarray, deadlines: list[int]
 ) -> tuple[dict, np.ndarray]:
     """Track each declared target in order, then continue toward the terminal goal."""
-    stage = step = stage_start = 0
-    events = []
-
-    def check(observation):
-        nonlocal stage, stage_start
-        while stage < len(targets):
-            reached = env.arrived(observation, targets[stage])
-            if not reached and step < deadlines[stage]:
-                break
-            events.append(
-                {
-                    "index": stage,
-                    "start_step": stage_start,
-                    "end_step": step,
-                    "deadline": deadlines[stage],
-                    "outcome": "arrived" if reached else "timeout",
-                }
-            )
-            stage = stage + 1 if reached else len(targets)
-            stage_start = step
+    goals = GoalSequence(
+        [
+            Stage(target, deadline)
+            for target, deadline in zip(targets, deadlines, strict=True)
+        ],
+        env.arrived,
+    )
+    step = 0
 
     def policy(observation, goal):
         nonlocal step
-        check(observation)
-        action = track(observation, targets[stage] if stage < len(targets) else goal)
+        stage = goals.advance(observation, step)
+        action = track(observation, goal if stage is None else stage.target)
         step += 1
         return action
 
     episode, path = rollout(env, seed, limit, policy)
-    check(path[-1])
-    if stage < len(targets):
-        events.append(
-            {
-                "index": stage,
-                "start_step": stage_start,
-                "end_step": step,
-                "deadline": deadlines[stage],
-                "outcome": "terminated",
-            }
-        )
-    handoff = events[-1]["end_step"]
-    arrivals = sum(event["outcome"] == "arrived" for event in events)
+    goals.finish(path[-1], step)
+    handoff = goals.handoff_step
     terminal = episode["first_success_step"]
     return {
         **episode,
-        "stage_events": events,
-        "arrived_all": arrivals == len(targets),
+        "stage_events": [asdict(event) for event in goals.events],
+        "arrived_all": goals.arrived_all,
         "attempt_steps": handoff,
         "remaining_at_handoff": limit - handoff,
-        "success_without_full_arrival": episode["success"] and arrivals < len(targets),
+        "success_without_full_arrival": episode["success"] and not goals.arrived_all,
         "success_after_handoff": terminal is not None and terminal > handoff,
     }, path
 
