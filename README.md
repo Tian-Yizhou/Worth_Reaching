@@ -44,15 +44,11 @@ Choose an experiment below for its data preparation and run commands.
 
 | Task | What you can test |
 | --- | --- |
+| [Dependency grid](docs/experiments.md#compare-ordered-targets-in-the-dependency-grid) | Measure the effect of target order and goal switches, then [compare learned selection](docs/experiments.md#learn-to-select-a-goal-from-terminal-outcomes) on latent and replay proposals. |
 | [Budgeted routes](docs/experiments.md#compose-latent-goals-under-action-budgets) | Compare latent goal composition and replay across budgets in a stochastic task with several routes to the same endpoint. |
-| [Dependency grid](docs/experiments.md#compare-ordered-targets-in-the-dependency-grid) | Measure the effect of target order and [compare learned selection](docs/experiments.md#learn-to-select-a-goal-from-terminal-outcomes) on latent and replay proposals. |
-| [MiniGrid KeyCorridor](docs/experiments.md#replay-a-keycorridor-decision) | Branch at one decision and inspect how a single action changes the outcome at the deadline. |
-| [Two-goal grid](docs/experiments.md#sample-and-execute-alternative-routes) | Switch the terminal goal on the same layout, sample alternate routes and train from execution feedback. |
-| [Craftax-Classic](docs/experiments.md#collect-craftax-trajectories) | Collect expert and random demonstrations, then train on masked windows from episodes that craft an iron pickaxe and survive through the deadline. |
-| [Maze2D / PointMaze](docs/experiments.md#run-the-diffuser-maze2d-pilots) | Compare direct and latent plans in U-Maze, Medium and Large, and probe first-target selection on Medium. |
-| [OGBench AntMaze](docs/experiments.md#train-the-antmaze-gcbc-baseline) | Train a goal-conditioned actor and reuse it to compare direct execution, waypoint following and learned plans. |
-| [Kuka stacking](docs/experiments.md#run-conditional-kuka-stacking) | Condition a plan on a requested four-block order and score the resulting tower in the Diffuser simulator. |
-| [OGBench Scene](docs/experiments.md#run-state-based-ogbench-scene) and [Puzzle](docs/experiments.md#run-state-based-ogbench-puzzle) | Evaluate manipulation plans on the official state-based goals and [probe Scene waypoint reachability](docs/experiments.md#test-scene-waypoint-reachability). |
+| [Selector comparison](docs/experiments.md#compare-selectors-on-matched-attempts) | Fit and compare selectors on a shared bank of matched attempts. |
+| [Maze2D / PointMaze](docs/experiments.md#run-the-diffuser-maze2d-pilots) | Compare direct and latent plans in U-Maze, Medium and Large, sweep the action budget, and [test frozen energy](docs/experiments.md#test-latent-energy-against-terminal-success) against terminal success. |
+| [OGBench Scene](docs/experiments.md#run-state-based-ogbench-scene) | Evaluate manipulation plans on the official state-based goals and [probe Scene waypoint reachability](docs/experiments.md#test-scene-waypoint-reachability). |
 
 ## Architecture
 
@@ -65,12 +61,7 @@ The Python package lives under `src/worth_reaching/`. Task adapters supply obser
 | [`data/`](src/worth_reaching/data) | Define shared trajectory and window formats, read OGBench state archives, and record experiment artifacts. |
 | [`planning/`](src/worth_reaching/planning) | Execute intermediate targets with a supplied controller and replan from new observations. |
 | [`evaluation/`](src/worth_reaching/evaluation) | Replay trajectories, compare matched attempts, and score waypoint arrival and final success. |
-| [`contracts.py`](src/worth_reaching/contracts.py) | Define the public observations, actions, and policy inputs for the KeyCorridor diagnostic. |
 | [`cli.py`](src/worth_reaching/cli.py), [`recipes.py`](src/worth_reaching/recipes.py), [`compute.py`](src/worth_reaching/compute.py) | Dispatch `wr` commands, resolve model settings, and select compute devices. |
 | [`configs/`](configs) | Store TOML task, model, and compute settings. |
 
-[Interface details](docs/architecture.md) · [Model configuration](docs/experiments.md#configure-a-completion-model) · [Python import migration](docs/python-imports.md) · [Contributing](CONTRIBUTING.md)
-
-## Acknowledgments
-
-The Craftax expert collector uses the Craftax-Classic PPO-RNN weights released by the ReMDM Planner project. [Checkpoint source](https://github.com/mathisweil/craftax-ReMDM-planner)
+[Interface details](docs/architecture.md) · [Model configuration](docs/experiments.md#configure-a-completion-model) · [Contributing](CONTRIBUTING.md)

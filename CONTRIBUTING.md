@@ -10,7 +10,7 @@ Development takes place on the server. Use the project plan to choose a bounded 
 
 ## Pull requests and review
 
-- Start significant changes on a short-lived branch from current `main`, such as `feat/craftax-adapter` or `fix/timeout-label`. Give each PR one acceptance criterion that a reviewer can check. Keep the code, tests, and docs needed to verify it together. Small independent documentation fixes can be committed directly when the maintainer requests it.
+- Start significant changes on a short-lived branch from current `main`, such as `feat/region-decoder` or `fix/timeout-label`. Give each PR one acceptance criterion that a reviewer can check. Keep the code, tests, and docs needed to verify it together. Small independent documentation fixes can be committed directly when the maintainer requests it.
 - Title the PR with the delivered behavior, using the same format as a commit subject. A single-commit PR can reuse the commit title. For several commits, name their combined outcome.
 - In the body, state what changed and what now works in one to three bullets. Include the motivation only when it helps explain the diff. Under **Verification**, give commands actually run and what they established. Link a run or fixture when it makes the result reproducible.
 - When the change affects experiment comparability, describe the specific change in observation access, data or split, budget, label, or metric. Record durable decisions about core interfaces, sampling, or evaluation in the relevant design document. Use a local ADR in `docs/adr/` to capture meaningful alternatives.

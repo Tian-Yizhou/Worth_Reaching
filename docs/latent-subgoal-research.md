@@ -69,7 +69,6 @@ Reviewers will also ask for continuous-control evidence (sections 7 and 8) and f
 ## Starting evidence
 
 - In the 391-action Maze2D Medium pilot, direct tracking succeeded on 23 of 64 starts. Among its 41 failures, retrospective inspection found at least one candidate that arrived and then succeeded on 15 and 10 starts for the two checkpoints. Selecting the lowest conditional flow energy before rollout yielded 25 and 18 successes, respectively, tying the highest-energy rule within each checkpoint. Better decoded trajectory error and candidate coverage motivate further testing of selection. [Source and protocol](experiments.md#test-latent-energy-against-terminal-success)
-- The two-goal grid shows that changing the endpoint changes the predicted route. Direct execution succeeds on about 99.6% of the ordinary grid's development attempts. In the stochastic passage pilot, terminal-outcome ranking improved on arrival ranking for the frozen proposer, while the end-to-end rates were similar to the risk-aware direct control. These runs motivate a task in which reaching superficially similar states can leave very different options for later decisions. [Grid diagnostics](experiments.md#train-from-execution-feedback)
 
 ## Experiment sequence
 

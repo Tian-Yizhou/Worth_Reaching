@@ -1,6 +1,6 @@
 # Research architecture
 
-Use an environment-independent planner and a simulator-backed evaluator. At decision time each policy receives the public history, objective, remaining budget and any legitimate public action constraints. The evaluator owns simulator snapshots, future random keys and outcome labels. This boundary allows the same planner to operate in a grid world, a crafting game and eventually a card game.
+Use an environment-independent planner and a simulator-backed evaluator. At decision time each policy receives the public history, objective, remaining budget and any legitimate public action constraints. The evaluator owns simulator snapshots, future random keys and outcome labels. This boundary allows the same planner to operate in grid tasks, mazes and manipulation.
 
 ## Proposed components
 
@@ -23,25 +23,22 @@ The `src/worth_reaching/` package groups code by responsibility.
 | `data/` | Represent public completion examples and masked trajectory windows, read shared OGBench archives and record experiment artifacts |
 | `models/` | Encode observations, predict masked latent positions and sample residual trajectories |
 | `models/training.py` | Configure Lightning trainers, step-indexed batches, checkpoints and logs |
-| `tasks/craftax/` | Collect expert and random episodes, validate world splits and export craft-and-survive windows |
-| `tasks/kuka/dataset.py` | Read Kuka demonstration clips and encode block-stacking goals |
-| `evaluation/` | Replay, matched continuations, shared-bank comparisons and paired route scoring |
-| `cli.py` | Connect configurations to collection, window export, training and evaluation |
+| `evaluation/` | Shared-bank selector comparison and Scene evaluation and reachability |
+| `cli.py` | Connect configurations to training and evaluation commands |
 | `tasks/pointmaze/` | Own the Maze2D task specifications, dataset and simulator adapters, controller, experiment commands and paired probes |
-| `tasks/antmaze/` | Load AntMaze archives and saved actors, train the GCBC baseline, and run latent and waypoint comparisons from matched starts |
 | `tasks/dependency_grid/` | Define switchable goals with ordered prerequisites, collect public trajectories, and evaluate declared or learned targets through paired execution |
 | `tasks/budget_routes/` | Sample latent goals, compose executable prefixes and assess rare routes under a shared learned transition scorer |
 | `planning/` | Execute decoded goals from public observation and action histories through a supplied controller |
 
-Group tasks that share simulator behavior in one family. For example, Scene and Puzzle share the OGBench reset and step implementation in `tasks/ogbench_manipulation/environment.py`. Their presets select the observation schema, goals and action limit. A new family can follow the PointMaze or AntMaze layout and register its commands from a lightweight `cli.py`, so listing commands works without installing simulator extras.
+Group tasks that share simulator behavior in one family. For example, Scene uses the OGBench reset and step implementation in `tasks/ogbench_manipulation/environment.py`, and its preset selects the observation schema, goals and action limit. A new family can follow the PointMaze or dependency-grid layout and register its commands from a lightweight `cli.py`, so listing commands works without installing simulator extras.
 
-PointMaze and AntMaze runners assemble the task adapter, completion model and controller. The model consumes public histories, goal observations, remaining action budgets and query offsets. The task loader checks the observation and action shapes against its archive schema. AntMaze, Kuka, Scene and Puzzle also use the continuous completion model in `models/continuous_completion.py` and the window types in `data/trajectory_windows.py`. Craftax and the grid diagnostic use the discrete-action predictor in `models/completion.py`.
+PointMaze and Scene runners assemble the task adapter, completion model and controller. The model consumes public histories, goal observations, remaining action budgets and query offsets. The task loader checks the observation and action shapes against its archive schema. Both use the continuous completion model in `models/continuous_completion.py` and the window types in `data/trajectory_windows.py`. The dependency grid and budgeted routes use the discrete-action predictor in `models/completion.py`.
 
 The trajectory completion model will use public data from `data/`. Its executor will consume public observations and emit primitive actions. Evaluation owns simulator snapshots and restores them for matched repeats. [Trajectory completion design](trajectory-completion.md)
 
 ## Training on multiple devices
 
-New model training uses PyTorch Lightning. Lightning runs DDP on one host and manages checkpointing and logging for each stage. A step-indexed sampler supplies the same global batch across device counts. A row mask excludes padding, and the loss uses the global count of valid elements to preserve its weighting under DDP. A stateful dataloader saves its cursor with the optimizer and model. Scene and Puzzle can evaluate independent starts in CPU processes after training. Frozen Scene evaluation also supports an experimental CUDA physics path through Warp. Each evaluator keeps both arms of a matched start together. Craftax simulation and the released expert policy use JAX. [Lightning Trainer](https://lightning.ai/docs/pytorch/stable/core-api/trainer) · [Scene evaluation backends](experiments.md#compare-native-cpu-and-batched-cuda-scene-evaluation)
+New model training uses PyTorch Lightning. Lightning runs DDP on one host and manages checkpointing and logging for each stage. A step-indexed sampler supplies the same global batch across device counts. A row mask excludes padding, and the loss uses the global count of valid elements to preserve its weighting under DDP. A stateful dataloader saves its cursor with the optimizer and model. Scene can evaluate independent starts in CPU processes after training. Frozen Scene evaluation also supports an experimental CUDA physics path through Warp. Each evaluator keeps both arms of a matched start together. [Lightning Trainer](https://lightning.ai/docs/pytorch/stable/core-api/trainer) · [Scene evaluation backends](experiments.md#compare-native-cpu-and-batched-cuda-scene-evaluation)
 
 ## Execution and data contracts
 
@@ -55,33 +52,15 @@ New model training uses PyTorch Lightning. Lightning runs DDP on one host and ma
 
 Test termination at the action limit and success on the last allowed action. Check that restoring a branch reproduces its public prefix and leaves the source episode intact. Perturb privileged fields while holding the public history fixed and compare the serialized policy input. Verify that an executor evaluated against a frozen waypoint uses the same encoder version and arrival rule that defined that waypoint.
 
-## Craftax collection contract
-
-Craftax-Classic passes symbolic observations and action IDs to the collection path. The adapter owns the native state. The evaluator can fork a live snapshot and supply a transition key for each step. World generation, transition randomness and policy sampling use separate streams. In `make_iron_pickaxe`, the first craft takes precedence over death or exhaustion of the budget. In `make_iron_pickaxe_and_survive`, death ends the episode. A living agent at the deadline succeeds if it has crafted the pickaxe. Both tasks share world identifiers and splits for a matched seed. The compound archive records its own task, rules version and first-craft step. Policies receive the same symbolic observations.
-
-Each compressed trajectory record contains the episode ID, initial observation, public transitions and outcome. The split manifest maps the episode ID to its root world and split before collection. The run manifest identifies the observation schema, rules and action vocabulary. The final summary is written after the trajectory file closes.
-
-Random and PPO-RNN collection share the same environment and transition seed streams for each world. Their policy sampling streams are separate from the simulator. PPO-RNN receives only the current public symbolic observation and its per-episode recurrent memory. The manifest records the checkpoint step and actor digest, and the split label is assigned by world regardless of policy.
-
-`tasks/craftax/dataset.py` loads completed random and expert collections through the same interface. It validates task rules and verifies episode IDs and split assignments against the original world seeds. Its split iterator yields complete public episode records without loading a policy checkpoint or constructing a simulator.
-
-`evaluation/craftax.py` reconstructs a live start from recorded actions and verifies each replayed observation. It returns the recurrent memory immediately before the current observation. A continuation can act directly or run a declared action prefix first. Forced actions still advance policy memory from each public observation. Match repeat keys across alternatives to compare outcomes on the same transition and policy random streams.
-
-## Masked trajectory window contract
-
-For a successful craft-and-survive episode with budget `B`, index observations from `o[0]` and let action `a[t]` produce `o[t]`. A window starts at an observed step `s` and queries the next `L` positions, with `s + L < B`. The input contains observations through `o[s]`, actions through `a[s]`, the terminal task and the remaining budget `B - s`. The target contains observations and incoming actions for steps `s + 1` through `s + L`. The query offsets `1..L` describe which positions to predict. They do not depend on when the pickaxe was crafted.
-
-Each successful episode contributes a window from the reset and up to seven later starts by default. The seed and world ID determine the sampled starts and lengths. Each export inherits the archive's world split. Train and development exports use terminal outcomes to select demonstrations. Model inputs contain the public task descriptor. The training shard can additionally supply `o[B]` through an explicit endpoint-example option. Development windows use the task descriptor alone. The final action is outside the windows, and the test split stays in the source archive for evaluation. [Window export and loader](experiments.md#prepare-masked-trajectory-windows)
-
 ## Latent predictor
 
 The first trainer learns an observation autoencoder on masked training observations and freezes its encoder and decoder. Both predictors use that same target representation, initial predictor weights and sampled batches. A GRU summarizes public observations and their incoming actions. The predictor receives that history representation, the time remaining and the requested time offsets. The goal-conditioned arm also receives the public task identifier. It is trained to predict the encoded observation at each requested position.
 
-The trainer pads the recent history and uses evenly spaced queries across longer masks to bound batch size. Only the public-input packer feeds prediction. Target observations are encoded separately for training and metrics. The decoder translates predictions into observation space for diagnostics. The model saves inference weights, architecture and training settings. [Training and goal switch protocol](experiments.md#train-and-test-latent-trajectory-completion)
+The trainer pads the recent history and uses evenly spaced queries across longer masks to bound batch size. Only the public-input packer feeds prediction. Target observations are encoded separately for training and metrics. The decoder translates predictions into observation space for diagnostics. The model saves inference weights, architecture and training settings. [Predictor checkpoint selection](experiments.md#select-a-predictor-checkpoint)
 
 ## Sampled routes and attempts
 
-The grid flow learns the difference between a frozen prediction and an encoded demonstration for the complete interior window. It conditions on the starting observation, the goal and the frozen prediction. Each draw decodes to a route and declares one intermediate cell and attempt deadline. A feedback executor uses the observed cell to choose the next action. After arrival or timeout the same controller continues toward the terminal objective with the remaining budget. The evaluation runner supplies repeat streams, pairs those streams across candidates and saves the attempted latent target separately from the observed results. The route diagnostic uses a fixed grid horizon and exact public cell arrival. [Route generation and execution protocol](experiments.md#sample-and-execute-alternative-routes)
+The residual flow learns the difference between a frozen prediction and an encoded demonstration for the complete interior window. It conditions on the starting observation, the goal and the frozen prediction. Each draw decodes to a route and declares intermediate targets with attempt deadlines. After arrival or timeout the same controller continues toward the terminal objective with the remaining budget. The evaluation runner supplies repeat streams, pairs those streams across candidates and saves the attempted latent target separately from the observed results.
 
 The dependency-grid adapter defines public geometry, position, and acquired keys. A separate experiment runner declares target cells, applies matched slip draws, and records realized arrivals, elapsed steps, and terminal success. A changed terminal goal or depth reuses the same layout, reset, and slip draws. The diagnostic uses disjoint layout IDs for train, development, and test. [Ordered-target diagnostic](experiments.md#compare-ordered-targets-in-the-dependency-grid)
 
@@ -89,33 +68,15 @@ The learned dependency-grid runner constructs `CompletionExample` windows with a
 
 Budgeted routes reuses the discrete completion model and residual flow. Latent samples map to public graph nodes for execution. The composer deduplicates targets by executable node and keeps the originating sample and slot. A transition model estimated from training exploration predicts budgeted terminal success using public node, inventory and risk profile. Evaluation owns the world-specific probabilities and future draws. [Budgeted route composition](experiments.md#compose-latent-goals-under-action-budgets)
 
-## Execution feedback
-
-Training rollouts record arrival and terminal success for predeclared targets. The supervised reranker fits on training attempts and accepts only public candidate features. Flow refinement pairs complete demonstration targets with masked feedback targets whose loss applies to the attempted latent position. A demonstration-only update controls for the additional optimizer steps. The evaluator keeps repeat masks and held-out outcomes outside the input to all selectors. [Feedback training protocol](experiments.md#train-from-execution-feedback)
-
-## AntMaze baseline
-
-The raw OGBench archive reader extracts public observations and actions. Terminal markers split stored trajectories and exclude their final padding actions. The hindsight sampler pairs an action at a nonfinal row with a later observation from the same trajectory. The actor maps the current observation and public goal observation to a continuous action. Training and validation use separate archives.
-
-The evaluator records task and reset IDs, MuJoCo integration state, task goal and the exact public tensors from the reset. Each rollout restores the snapshot and starts with the saved goal. The actor receives only the latest public observation and the public goal. The evaluator uses the benchmark's success event, including its occurrence on the final allowed action. Development and test use disjoint reset seeds. [AntMaze baseline protocol](experiments.md#train-the-antmaze-gcbc-baseline)
-
-The learned AntMaze planner first fits an observation encoder and decoder by reconstruction, then freezes them. A masked completion predictor uses the public observation and action history, terminal goal and remaining budget. A conditional flow samples residual trajectories around the prediction in latent space. The decoder maps the sampled latents back to full public observations. The development runner gives the frozen GCBC actor the earliest observation from the first sampled route and replans when that slot's queried time offset elapses. Each replan uses the actual observation and action history. The evaluator scores the original terminal objective over the full rollout. [Learned planner protocol](experiments.md#run-learned-latent-planning-in-antmaze) · [Research design](trajectory-completion.md)
-
-The executor diagnostic uses privileged maze geometry inside the evaluator to predeclare an XY route. Its position tolerance controls the handoff between adjacent waypoints in that diagnostic. [Waypoint protocol](experiments.md#evaluate-antmaze-waypoint-execution)
-
 ## PointMaze benchmark
 
-The learned PointMaze and AntMaze planners share the masked window sampler, completion model and time-based replanning policy. The PointMaze task determines the Minari archive, evaluation specification and official action limit. The loader retains four public position and velocity features and two continuous actions. The evaluator restores a natural reset from its seed and passes the public goal position with zero target velocity. The same feedback controller consumes either that goal or a decoded intermediate observation. The planner receives public observations and actions. The simulator's goal geometry and sparse rewards are available to the evaluator for setup and scoring. [Maze2D protocol](experiments.md#run-the-diffuser-maze2d-pilots)
+The learned PointMaze and Scene planners share the masked window sampler, completion model and time-based replanning policy. The PointMaze task determines the Minari archive, evaluation specification and official action limit. The loader retains four public position and velocity features and two continuous actions. The evaluator restores a natural reset from its seed and passes the public goal position with zero target velocity. The same feedback controller consumes either that goal or a decoded intermediate observation. The planner receives public observations and actions. The simulator's goal geometry and sparse rewards are available to the evaluator for setup and scoring. [Maze2D protocol](experiments.md#run-the-diffuser-maze2d-pilots)
 
 The official action limit is PointMaze's default evaluation budget. The model conditions on the actual remaining budget and queries a prediction span capped by trajectory coverage. Full-span training windows can share an observed endpoint and query times while allowing different remaining budgets. Budget sweeps share a checkpoint, seeded resets, executor, and goal predicate. The evaluator records the first native success event and the span used for each prediction. [Budget sweep](experiments.md#sweep-the-action-budget-in-maze2d-medium)
 
-## Kuka stacking benchmark
-
-The Kuka adapter runs the pinned upstream PyBullet simulator with headless Gymnasium compatibility. Its planner uses the public 39-coordinate state, a terminal block-position condition with free horizontal translation, and time. The demonstration files contain states, so the shared masked completion model uses observation history alone. The executor tracks decoded arm joint targets and attachment requests using the author's motor-control and grasp interface. The evaluator keeps access to simulator contacts and supplies the same seeded start and block order to each arm. [Conditional stacking protocol](experiments.md#run-conditional-kuka-stacking)
-
 ## OGBench manipulation benchmarks
 
-Scene and Puzzle share the OGBench state archive loader, continuous goal-conditioned cloning model, masked completion and receding-goal planner. The benchmark preset specifies the observation width, archive and official action limit. The loader reads public observations, five-dimensional actions and episode markers. The evaluator seeds a persistent action space because OGBench samples actions while constructing the goal observation. It regenerates the exact public start and goal and verifies MuJoCo integration state before the second arm. Simulator integration state and native success events stay inside evaluation. [Scene protocol](experiments.md#run-state-based-ogbench-scene) · [Puzzle protocol](experiments.md#run-state-based-ogbench-puzzle)
+Scene uses the OGBench state archive loader, continuous goal-conditioned cloning model, masked completion and receding-goal planner. The benchmark preset specifies the observation width, archive and official action limit. The loader reads public observations, five-dimensional actions and episode markers. The evaluator seeds a persistent action space because OGBench samples actions while constructing the goal observation. It regenerates the exact public start and goal and verifies MuJoCo integration state before the second arm. Simulator integration state and native success events stay inside evaluation. [Scene protocol](experiments.md#run-state-based-ogbench-scene)
 
 ## Shared-attempt evaluation contract
 
