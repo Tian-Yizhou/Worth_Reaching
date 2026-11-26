@@ -118,14 +118,15 @@ This experiment tests the core claim in the two controlled tasks. Freeze the wor
 
 | Arm | Goal given to the executor and arrival rule |
 | --- | --- |
-| Decoded point goal | The current pipeline: decode `z` once, project it to a cell or node, and require exact arrival. |
-| Region goal, encoder consistency | Condition on `z` and declare arrival when `‖enc(s) − z‖ ≤ ε`. |
-| Region goal, region support | Condition on `z` and declare arrival when `log p(s | z) ≥ κ`. |
-| Region goal, decoded executor | Condition the existing observation executor on a fresh sample from `p(s | z)` at each replan. This separates the effect of the region from the effect of the latent-conditioned executor. |
-| Single latent point, in the style of SAGE and HWM | Condition on `z` and declare arrival by latent distance to `z` with a threshold tuned for the point, without a region decoder. |
-| Gaussian region, in the style of DisCo RL | Replace the diffusion decoder with a Gaussian `p(s | z)` and use region-support arrival. |
+| Decoded point goal | Decode `z` once, project it to a cell or node, and require exact arrival. Run it with the public shortest-path controller and with a learned observation-conditioned executor. |
+| Latent point, in the style of SAGE and HWM | Condition the latent executor on `z` and declare arrival when `‖enc(s) − z‖ ≤ ε`. This is the encoder-consistency rule and uses no region decoder. |
+| Region goal, region support | Condition the latent executor on `z` and declare arrival when the kernel density of `s` under samples from `p(s | z)` reaches κ. |
+| Gaussian region, in the style of DisCo RL | Match a diagonal Gaussian to the same decoder samples and use its support for arrival. |
+| Region goal, decoded executor | Condition the observation executor on one sample from `p(s | z)` per repeat, with region-support arrival. This separates the effect of the region from the effect of the latent-conditioned executor. |
 
-Select `ε` and `κ` on development layouts, and report a sweep that traces region granularity against arrival and value. Measure region coherence by sampling several realizations from `p(s | z)`, attempting each as a point goal on matched streams, and reporting the spread of attempt value within a region against the spread between regions. Decode the regions with the highest and lowest learned value on held-out layouts and check whether they correspond to key, gate or supply states.
+Both executors share an architecture and are trained by behavior cloning on the same demonstrations, so the comparison does not reward a hand-written controller. The continuation after the stages is shared.
+
+Calibrate `ε` and `κ` on development windows so that each rule accepts the same share of realized states, at 25%, 50% and 75%, and report the false arrival rate on mismatched states. Rules are then compared at equal recall, and the sweep traces region granularity against arrival and value. Measure region coherence by sampling several realizations from `p(s | z)`, attempting each as a point goal on matched streams, and reporting the spread of attempt value within a region against the spread between regions. Decode the regions with the highest and lowest learned value on held-out layouts and check whether they correspond to key, gate or supply states.
 
 **Exit criterion.** Report arrival, value of attempting and paired terminal success by arm on test layouts with layout-bootstrap intervals. Region goals support the claim when they raise terminal success over point goals on the same proposals and their realizations agree in value more than realizations of different regions do. Choose the arrival rule for later experiments from the development results.
 

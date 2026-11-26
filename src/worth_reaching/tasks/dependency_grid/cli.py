@@ -48,6 +48,48 @@ def _latent(args: argparse.Namespace) -> dict:
     )
 
 
+def _regions(args: argparse.Namespace) -> dict:
+    from worth_reaching.models.completion import TrainingConfig
+    from worth_reaching.models.executor import ExecutorConfig
+    from worth_reaching.models.region import RegionConfig
+    from worth_reaching.tasks.dependency_grid.dataset import QUERY_STEPS
+    from worth_reaching.tasks.dependency_grid.latent import EvaluationConfig
+    from worth_reaching.tasks.dependency_grid.regions import (
+        RegionRunConfig,
+        SweepConfig,
+        run,
+    )
+
+    training = completion_recipe(
+        replace(TrainingConfig(), queries_per_window=len(QUERY_STEPS)), args
+    )
+    evaluation = EvaluationConfig(
+        split=args.split,
+        layouts=args.layouts,
+        seed=args.eval_seed,
+        repeats=args.repeats,
+        candidates=args.candidates,
+        slip_probability=args.slip_probability,
+    )
+    config = RegionRunConfig(
+        RegionConfig(updates=args.region_updates),
+        ExecutorConfig(updates=args.executor_updates),
+        SweepConfig(
+            recall_levels=tuple(args.recall_levels),
+            region_samples=args.region_samples,
+        ),
+    )
+    return run(
+        args.out,
+        training,
+        evaluation,
+        config,
+        collection_seed=args.collection_seed,
+        demonstrations=args.demonstrations,
+        flow_updates=args.flow_updates,
+    )
+
+
 def register_commands(commands) -> None:
     command = commands.add_parser(
         "dependency-grid", help="Compare matched goal and order interventions"
@@ -102,3 +144,38 @@ def register_commands(commands) -> None:
     latent.add_argument("--density-samples", type=int, default=128)
     latent.add_argument("--slip-probability", type=float, default=0.10)
     latent.set_defaults(run=_latent, extra="training")
+
+    regions = commands.add_parser(
+        "dependency-grid-regions",
+        help="Compare region goals with decoded point goals on matched starts",
+    )
+    regions.add_argument("--out", type=Path, required=True)
+    regions.add_argument("--config", type=Path, help="TOML recipe with a [model] table")
+    for name in (
+        "seed",
+        "encoder-updates",
+        "updates",
+        "predictor-val-every",
+        "predictor-patience",
+    ):
+        regions.add_argument(f"--{name}", type=int)
+    regions.add_argument("--flow-updates", type=int, default=400)
+    regions.add_argument("--region-updates", type=int, default=3000)
+    regions.add_argument("--executor-updates", type=int, default=2000)
+    regions.add_argument(
+        "--recall-levels",
+        type=float,
+        nargs="+",
+        default=[0.25, 0.5, 0.75],
+        help="Share of realized dev states each arrival rule accepts",
+    )
+    regions.add_argument("--region-samples", type=int, default=32)
+    regions.add_argument("--collection-seed", type=int, default=7)
+    regions.add_argument("--demonstrations", type=int, default=8)
+    regions.add_argument("--split", choices=("dev", "test"), default="dev")
+    regions.add_argument("--layouts", type=int)
+    regions.add_argument("--eval-seed", type=int, default=43301)
+    regions.add_argument("--repeats", type=int, default=16)
+    regions.add_argument("--candidates", type=int, default=8)
+    regions.add_argument("--slip-probability", type=float, default=0.10)
+    regions.set_defaults(run=_regions, extra="training")

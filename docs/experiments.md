@@ -10,6 +10,7 @@ Each row lists the experiment extra to pass to `uv sync --locked`. For model tra
 | --- | --- | --- |
 | [Dependency grid](#compare-ordered-targets-in-the-dependency-grid) | Base install | Run matched target attempts at two depths with no dataset or checkpoint. |
 | [Dependency-grid latent goals](#test-frozen-latent-goals-in-the-dependency-grid) | Training only | Collect public trajectories, train a completion model, and compare frozen selection and replay. |
+| [Region goals in the grid](#compare-region-goals-with-decoded-point-goals) | Training only | Train the region decoder and goal executors, then compare region and point goals on the same latent proposals. |
 | [Budgeted routes](#compose-latent-goals-under-action-budgets) | Training only | Compose latent goals and compare routes across action budgets. |
 | [Selector comparison](#compare-selectors-on-matched-attempts) | Training only | Fit and compare selectors on exported `shared_attempts_v1` banks. |
 | [PointMaze](#run-the-diffuser-maze2d-pilots) | `pointmaze` | Download the corresponding Minari dataset. Train with `pointmaze-latent`, then reuse frozen Medium runs for the [energy comparison](#test-latent-energy-against-terminal-success). |
@@ -72,6 +73,31 @@ The fitted scorer ranks each evaluation pool once before rollouts, with direct t
 
 For a short smoke run, add `--selector-repeats 2` to the smoke settings above. The comparison evaluates one high-level choice per start with a fixed continuation. [Research plan](latent-subgoal-research.md#2-separate-discovery-selection-and-execution)
 
+## Compare region goals with decoded point goals
+
+This is experiment E1. It trains the dependency-grid world model as above, then a region decoder `p(s | z)` and two goal-conditioned executors from the same demonstrations. Every arm attempts the same latent candidates, the forecast and the flow samples, from matched starts and slip draws. After the stages end, every arm continues with the shared shortest-path controller toward the terminal goal. [Research plan](latent-subgoal-research.md#4-compare-region-goals-with-decoded-point-goals)
+
+```bash
+uv sync --locked --extra training-cpu
+run_dir="$(mktemp -d results/dependency-grid-regions-dev.XXXXXX)"
+uv run --no-sync wr dependency-grid-regions --seed 7 --out "$run_dir/seed-7"
+```
+
+| Arm | Executor and goal | Arrival |
+| --- | --- | --- |
+| `point_bfs` | Shortest-path controller on the decoded, rounded cell | Exact cell |
+| `point_learned` | Observation-conditioned executor on the decoded observation | Exact cell |
+| `latent_point@r` | Latent-conditioned executor on `z` | `‖enc(s) − z‖ ≤ ε` |
+| `region_gaussian@r` | Latent-conditioned executor on `z` | Support under a diagonal Gaussian matched to the region samples at least κ |
+| `region_flow@r` | Latent-conditioned executor on `z` | Kernel support under region decoder samples at least κ |
+| `region_decoded@r` | Observation-conditioned executor on one decoder sample per repeat | Kernel support under region decoder samples at least κ |
+
+The region decoder is a conditional flow trained on latents interpolated between the world model's prediction and the encoding of the realized state, so the forecast decodes to a wide region and a flow sample to a narrow one. It also conditions on the decision-time observation and generates the change from it, so the fixed layout decodes exactly. Both executors share an architecture and are trained by behavior cloning on hindsight goals within eight steps of each demonstrated action. The latent executor receives encoded goals. The kernel bandwidth and Gaussian floor are half a cell.
+
+Each arrival rule's threshold is calibrated on development windows so that it accepts a fixed share `r` of realized states, set by `--recall-levels` (default 0.25, 0.5 and 0.75). Rules are therefore compared at equal recall. `summary.json` records each threshold and its false arrival rate on mismatched development states.
+
+`candidate-bank.json` and `candidate-regions.npz` record every candidate's latents, decoded observations, point targets, region samples and per-repeat realizations before any attempt. `region-weights.pt` stores the decoder, the Gaussian scale and both executors. `summary.json` reports, for each arm and depth, terminal success, arrival, success after a miss and attempt length for the forecast, the uniform average over flow candidates and the candidate selected on independent reference repeats. Paired differences from `point_learned` carry layout-bootstrap intervals. It also reports executor accuracy on development demonstrations. For a smoke run, append `--layouts 1 --demonstrations 1 --encoder-updates 2 --updates 2 --flow-updates 2 --region-updates 2 --executor-updates 2 --repeats 2 --candidates 2`.
+
 ## Compose latent goals under action budgets
 
 Install `training-cpu` as for the dependency-grid latent workflow. Run the controlled task with two-, three-, and four-action budgets.
@@ -112,6 +138,7 @@ Artifacts stay in `results/` on the server. Git and the Mac sync scripts exclude
 | `results/datasets/` | Complete trajectory collections and their logs |
 | `results/dependency-grid.*/` | Layouts, matched target attempts and terminal success by goal and depth |
 | `results/dependency-grid-latent.*/` | Public trajectories, frozen weights, candidate declarations, and matched terminal outcomes |
+| `results/dependency-grid-regions-*/` | Region decoders, executors, declared regions and matched attempts by arm |
 | `results/budget-routes.*/` | Route candidate banks, matched attempts and results by budget |
 | `results/attempt-compare.*/` | Shared-bank selector fits and paired comparisons |
 | `results/pointmaze-diffuser.*/` | PointMaze archive splits, decoded plans, executed trajectories and paired outcomes |
