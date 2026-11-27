@@ -412,6 +412,39 @@ def _summarize(outcomes: list[dict], bank: list[dict]) -> dict:
     return summary
 
 
+def train_world_model(
+    out: Path,
+    windows: dict[str, list[CompletionExample]],
+    training: TrainingConfig,
+    flow_updates: int,
+):
+    """Fit the codec, both predictors and the residual flow, then save their weights."""
+    codec, predictor, goal_blind = fit(
+        windows["train"], windows["dev"], SPEC, training, out / "checkpoints"
+    )
+    completion = FrozenCompletion(SPEC, training, {"kind": SCHEMA}, codec, predictor)
+    packed, targets = pack_windows(windows["train"], SPEC, training)
+    forecast = completion.forecast(packed)
+    fitted_flow, scale = flow.fit(
+        flow.route_conditions(packed, forecast, len(grid.GOALS)),
+        completion.encode(targets) - forecast,
+        seed=stream_seed(training.seed, 4153),
+        updates=flow_updates,
+        out=out / "checkpoints" / "flow",
+    )
+    save_weights(
+        out / WEIGHTS_FILE,
+        {
+            "codec": weights(codec),
+            "conditioned": weights(predictor),
+            "goal_blind": weights(goal_blind),
+            "flow": weights(fitted_flow),
+            "scale": scale.numpy(),
+        },
+    )
+    return completion, goal_blind, fitted_flow, scale
+
+
 def run(
     out: Path,
     training: TrainingConfig,
@@ -445,30 +478,10 @@ def run(
     windows, replay, steps = _collect(
         out, demonstrations, collection_seed, evaluation.slip_probability
     )
-    codec, predictor, goal_blind = fit(
-        windows["train"], windows["dev"], SPEC, training, out / "checkpoints"
-    )
-    completion = FrozenCompletion(SPEC, training, {"kind": SCHEMA}, codec, predictor)
-    packed, targets = pack_windows(windows["train"], SPEC, training)
-    forecast = completion.forecast(packed)
-    fitted_flow, scale = flow.fit(
-        flow.route_conditions(packed, forecast, len(grid.GOALS)),
-        completion.encode(targets) - forecast,
-        seed=stream_seed(training.seed, 4153),
-        updates=flow_updates,
-        out=out / "checkpoints" / "flow",
+    completion, goal_blind, fitted_flow, scale = train_world_model(
+        out, windows, training, flow_updates
     )
     weights_path = out / WEIGHTS_FILE
-    save_weights(
-        weights_path,
-        {
-            "codec": weights(codec),
-            "conditioned": weights(predictor),
-            "goal_blind": weights(goal_blind),
-            "flow": weights(fitted_flow),
-            "scale": scale.numpy(),
-        },
-    )
 
     def declare(case_layouts):
         for layout, depth, goal, lane in _cases(case_layouts):

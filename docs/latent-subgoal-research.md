@@ -118,16 +118,19 @@ This experiment tests the core claim in the two controlled tasks. Freeze the wor
 
 | Arm | Goal given to the executor and arrival rule |
 | --- | --- |
-| Decoded point goal | The current pipeline: decode `z` once, project it to a cell or node, and require exact arrival. |
-| Region goal, encoder consistency | Condition on `z` and declare arrival when `‖enc(s) − z‖ ≤ ε`. |
-| Region goal, region support | Condition on `z` and declare arrival when `log p(s | z) ≥ κ`. |
-| Region goal, decoded executor | Condition the existing observation executor on a fresh sample from `p(s | z)` at each replan. This separates the effect of the region from the effect of the latent-conditioned executor. |
-| Single latent point, in the style of SAGE and HWM | Condition on `z` and declare arrival by latent distance to `z` with a threshold tuned for the point, without a region decoder. |
-| Gaussian region, in the style of DisCo RL | Replace the diffusion decoder with a Gaussian `p(s | z)` and use region-support arrival. |
+| Decoded point goal | Decode `z` once, project it to a cell or node, and require exact arrival. Run it with the public shortest-path controller and with a learned observation-conditioned executor. |
+| Latent point, in the style of SAGE and HWM | Condition the latent executor on `z` and declare arrival when `‖enc(s) − z‖ ≤ ε`. This is the encoder-consistency rule and uses no region decoder. |
+| Region goal, region support | Condition the latent executor on `z` and declare arrival when the kernel density of `s` under samples from `p(s | z)` reaches κ. |
+| Gaussian region, in the style of DisCo RL | Match a diagonal Gaussian to the same decoder samples and use its support for arrival. |
+| Region goal, decoded executor | Condition the observation executor on one sample from `p(s | z)` per repeat, with region-support arrival. This separates the effect of the region from the effect of the latent-conditioned executor. |
 
-Select `ε` and `κ` on development layouts, and report a sweep that traces region granularity against arrival and value. Measure region coherence by sampling several realizations from `p(s | z)`, attempting each as a point goal on matched streams, and reporting the spread of attempt value within a region against the spread between regions. Decode the regions with the highest and lowest learned value on held-out layouts and check whether they correspond to key, gate or supply states.
+Both executors share an architecture and are trained by behavior cloning on the same demonstrations, so the comparison does not reward a hand-written controller. The continuation after the stages is shared.
+
+Calibrate `ε` and `κ` on development windows so that each rule accepts the same share of realized states, at 25%, 50% and 75%, and report the false arrival rate on mismatched states. Rules are then compared at equal recall, and the sweep traces region granularity against arrival and value. Measure region coherence by sampling several realizations from `p(s | z)`, attempting each as a point goal on matched streams, and reporting the spread of attempt value within a region against the spread between regions. Decode the regions with the highest and lowest learned value on held-out layouts and check whether they correspond to key, gate or supply states.
 
 **Exit criterion.** Report arrival, value of attempting and paired terminal success by arm on test layouts with layout-bootstrap intervals. Region goals support the claim when they raise terminal success over point goals on the same proposals and their realizations agree in value more than realizations of different regions do. Choose the arrival rule for later experiments from the development results.
+
+**Development result in the dependency grid (provisional).** Five model seeds on the 16 development layouts, averaging terminal success over the eight flow candidates per start, with 95% intervals that resample layouts after averaging seeds. Judging arrival on the whole observation instead of the decoded cell gave the largest effect. With the same observation executor and decoded target, region-support arrival beat exact-cell arrival by 0.21 [0.15, 0.29] at depth one and by 0.16 [0.12, 0.21] at depth two at recall 0.9, on every seed. Exact-cell arrival ignores the key flags, so it hands control to the key-blind continuation before the key is collected. Under region-support arrival, a sampled realization beat the decoded mean by 0.02 to 0.03 on four of five seeds. At depth two the flow decoder beat the matched Gaussian by 0.01 to 0.05. Region support did not beat encoder consistency at equal recall: at recall 0.9 encoder consistency was ahead by 0.024 [0.014, 0.034] at depth two. Regions were not coherent: the variance of value across realizations of one region (0.085 at depth two) exceeded the variance between regions of the same start (0.058). Depth-two success rose with recall up to 0.9 and fell slightly at 0.95. The learned executor already encodes the demonstrated key-fetching behavior, so depth one barely depends on the arrival rule. The grid therefore cannot separate goal forms well. The next tests move to Maze2D and Scene. The runs are under `results/dependency-grid-regions-dev.Ya1JrG/`.
 
 ### 5. Learn budget-conditioned option value in latent space
 

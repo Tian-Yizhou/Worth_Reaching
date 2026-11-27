@@ -2,6 +2,7 @@
 
 import json
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from platform import python_version
@@ -24,6 +25,39 @@ class Attempt:
     environment_steps: int
 
 
+def pursue(
+    layout: grid.Layout,
+    depth: int,
+    goal: grid.Position,
+    stages: list[Stage],
+    arrived: Callable[[grid.State, object], bool],
+    act: Callable[[grid.State, object], int],
+    slips: tuple[bool, ...],
+) -> Attempt:
+    """Pursue declared stages with a supplied executor, then track the terminal goal."""
+    state = grid.State()
+    goals = GoalSequence(stages, arrived)
+    elapsed = 0
+    while elapsed < len(slips) and state.position != goal:
+        stage = goals.advance(state, elapsed)
+        if slips[elapsed]:
+            action = grid.WAIT
+        elif stage is None:
+            action = grid.track(layout, state.position, goal)
+        else:
+            action = act(state, stage.target)
+        state = grid.step(layout, depth, state, action)
+        elapsed += 1
+    goals.finish(state, elapsed)
+    return Attempt(
+        state.position == goal,
+        goals.arrived_all if stages else None,
+        tuple(event.end_step for event in goals.arrivals),
+        goals.handoff_step,
+        elapsed,
+    )
+
+
 def attempt(
     layout: grid.Layout,
     depth: int,
@@ -31,30 +65,18 @@ def attempt(
     targets: tuple[grid.Position, ...],
     slips: tuple[bool, ...],
 ) -> Attempt:
-    state = grid.State()
-    goals = GoalSequence(
+    """Track declared cells with the public shortest-path controller."""
+    return pursue(
+        layout,
+        depth,
+        goal,
         [
             Stage(target, min(deadline, len(slips)))
             for target, deadline in zip(targets, DEADLINES, strict=False)
         ],
         lambda current, target: current.position == target,
-    )
-    elapsed = 0
-    while elapsed < len(slips) and state.position != goal:
-        stage = goals.advance(state, elapsed)
-        target = goal if stage is None else stage.target
-        action = (
-            grid.WAIT if slips[elapsed] else grid.track(layout, state.position, target)
-        )
-        state = grid.step(layout, depth, state, action)
-        elapsed += 1
-    goals.finish(state, elapsed)
-    return Attempt(
-        state.position == goal,
-        goals.arrived_all if targets else None,
-        tuple(event.end_step for event in goals.arrivals),
-        goals.handoff_step,
-        elapsed,
+        lambda current, target: grid.track(layout, current.position, target),
+        slips,
     )
 
 

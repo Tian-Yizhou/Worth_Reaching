@@ -25,9 +25,9 @@ Every part has a precedent: DisCo RL represents goals as state distributions, Go
 | Option value `Q(h, z, b)` | Semi-Markov Bellman backup `Q(h, z, b) = E[V(h', b − τ)]` with `V(h, b) = max(Q_direct(h, b), max_z Q(h, z, b))`, fitted on latent features from single-segment attempts that record the elapsed time `τ` and landing history `h'` whether or not the region was reached. The Monte Carlo logistic selector remains the reference. | Planned. Current selectors use Monte Carlo outcomes on hand-designed features or a public-state transition table. |
 | Sequences of regions | Generate ordered region sequences guided by the learned value, compared with enumeration plus dynamic programming at matched inference budgets. Enumeration is exact at depth two and becomes infeasible at depths three and four. | Planned. Current composition enumerates up to 24 ordered pairs. |
 
-## Completed evidence with decoded point goals
+## Completed evidence
 
-These studies decoded each latent proposal into a single public target, projected it to a cell, a graph node or an observation, and used hand-designed selector features that the method no longer uses. They support (B) and the value definition. They do not yet test goals as latent regions.
+Except for the region-goal row, these studies decoded each latent proposal into a single public target, projected it to a cell, a graph node or an observation, and used hand-designed selector features that the method no longer uses. They support (B) and the value definition. They do not yet test goals as latent regions.
 
 | Study | Result | Record |
 | --- | --- | --- |
@@ -35,6 +35,7 @@ These studies decoded each latent proposal into a single public target, projecte
 | Frozen energy versus uniform choice | Minimum flow energy and uniform selection were within noise on development layouts for both model seeds. Reference-selected flow candidates reached 46.5% and 62.5%, so the pool contained useful targets that the frozen score missed. | [Development comparison](docs/latent-subgoal-research.md#2-separate-discovery-selection-and-execution) |
 | Outcome selection on test layouts | Outcome scoring raised two-stage latent success over minimum energy by 18.75 and 25.00 points for the two model seeds. The intervals were [6.25, 34.38] and [9.38, 43.75]. | [Confirmation](docs/latent-subgoal-research.md#2-separate-discovery-selection-and-execution) |
 | Budgeted route composition on test worlds | At four actions, composition reached 93.16% against 84.38% for joint samples, single targets and replay. The gain was 8.79 points [1.17, 16.80]. Composition confirmed 12 low-support paths per seed, and the selected route changed with the budget on 8 of 8 worlds. | [Confirmation](docs/latent-subgoal-research.md#3-compose-alternative-routes-under-a-budget) |
+| Region goals in the dependency grid (development, provisional) | Over five seeds, judging arrival on the whole observation beat exact-cell arrival by 0.16 [0.12, 0.21] at depth two under the same executor. Sampled realizations and the flow decoder gave small consistent gains, but region support did not beat encoder consistency and regions were not coherent. The grid cannot separate goal forms well because the learned executor already fetches keys. | [E1 result](docs/latent-subgoal-research.md#4-compare-region-goals-with-decoded-point-goals) |
 | Scene executor diagnostic (development, provisional) | Across six executor checkpoints at different scales, drawer insertion within 128 actions rose from 9 of 108 to 39 of 108 validation clips with an observation-conditioned executor. | [Waypoint protocol](docs/experiments.md#test-scene-drawer-insertion-in-isolation) |
 
 ## Paper experiments by priority
