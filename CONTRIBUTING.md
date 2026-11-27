@@ -1,6 +1,6 @@
 # Contributing
 
-Development takes place on the server. Use the project plan to choose a bounded change. For changes to an experimental claim, consult the team's local research protocol at `docs/research_idea/research-protocol.md`. [Implementation plan](PLAN.md)
+Development takes place on the server. Use the project plan to choose a bounded change. For changes to an experimental claim, consult the team's local research protocol at `local-file/research_idea/research-protocol.md`. [Implementation plan](PLAN.md)
 
 ## Commits
 

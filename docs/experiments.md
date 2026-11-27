@@ -15,6 +15,8 @@ Each row lists the experiment extra to pass to `uv sync --locked`. For model tra
 | [Selector comparison](#compare-selectors-on-matched-attempts) | Training only | Fit and compare selectors on exported `shared_attempts_v1` banks. |
 | [PointMaze](#run-the-diffuser-maze2d-pilots) | `pointmaze` | Download the corresponding Minari dataset. Train with `pointmaze-latent`, then reuse frozen Medium runs for the [energy comparison](#test-latent-energy-against-terminal-success). |
 | [OGBench Scene](#run-state-based-ogbench-scene) | `ogbench` | Download the Scene play archive and run `scene-latent`. Add `scene-warp` for batched CUDA evaluation. |
+| [Latent options in Maze2D](#plan-with-latent-options-in-maze2d) | `pointmaze` | Reuse a frozen `pointmaze-latent` budget directory, then train the executor and option value and compare the planner with direct execution and the oracle. |
+| [Latent options in Scene](#plan-with-latent-options-in-scene) | `ogbench` | Reuse a `scene-regions` run's world model and latent executor, then fit the option value and compare the planner with direct execution. |
 
 Runs save model weights as PyTorch tensors in `weights.pt`.
 
