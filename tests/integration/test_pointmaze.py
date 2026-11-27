@@ -296,6 +296,60 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
         assert len(attempts) == 2 + 2 * len(manifest["arms"])
         assert {row["seed"] for row in attempts} == {29001}
 
+        options_out = tmp_path / "options"
+        tiny = [
+            "--checkpoint",
+            out,
+            "--data-dir",
+            data_dir,
+            "--eval-repeats",
+            "1",
+            "--executor-updates",
+            "2",
+            "--executor-batch-size",
+            "16",
+            "--value-updates",
+            "2",
+            "--value-options",
+            "64",
+            "--samples",
+            "2",
+        ]
+        subprocess.run(
+            ["wr", "pointmaze-options", *tiny, "--out", options_out],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        options_manifest = json.loads((options_out / "manifest.json").read_text())
+        assert options_manifest["surprise_threshold"] > 0
+        options_summary = json.loads((options_out / "summary.json").read_text())
+        planner = options_summary["arms"]["options@0.001"]
+        assert {"direct", "oracle", "direct_latent", "no_goal@0.001"} <= set(
+            options_summary["arms"]
+        )
+        assert planner["generations_per_episode"] >= 1
+        assert options_summary["arms"]["direct_latent"]["goal_choice_share"] == 1
+        reused = tmp_path / "options-reused"
+        subprocess.run(
+            [
+                "wr",
+                "pointmaze-options",
+                *tiny,
+                "--out",
+                reused,
+                "--trained",
+                options_out,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert (
+            json.loads((reused / "summary.json").read_text())["arms"]
+            == options_summary["arms"]
+        )
+
 
 def test_maze_geometry_scores_walls_and_walks_the_shortest_path():
     gym = pytest.importorskip("gymnasium")

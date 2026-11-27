@@ -22,6 +22,7 @@ The `src/worth_reaching/` package groups code by responsibility.
 | `tasks/<family>/scripts/` | Hold task-specific setup and collection launchers and their supporting files |
 | `data/` | Represent public completion examples and masked trajectory windows, read shared OGBench archives and record experiment artifacts |
 | `models/` | Encode observations, predict masked latent positions and sample residual trajectories |
+| `models/option_value.py` | Label hindsight options from an archive and fit the budget-conditioned option value with semi-Markov expectile backups |
 | `models/training.py` | Configure Lightning trainers, step-indexed batches, checkpoints and logs |
 | `evaluation/` | Shared-bank selector comparison, region calibration and arms, the closed-loop goal pursuit shared by Maze2D and Scene, and Scene evaluation and reachability |
 | `cli.py` | Connect configurations to training and evaluation commands |
@@ -30,6 +31,7 @@ The `src/worth_reaching/` package groups code by responsibility.
 | `tasks/budget_routes/` | Sample latent goals, compose executable prefixes and assess rare routes under a shared learned transition scorer |
 | `planning/goals.py` | Share stage semantics for every task: pursue declared goals in order until arrival, deadline or termination, abandon the rest after a miss, and record how each stage ended. The task supplies the target its executor consumes and the arrival rule |
 | `planning/receding_goals.py` | Replan decoded goals from public observation and action histories for the continuous tasks |
+| `planning/options.py` | Choose latent options and their durations with a budget-conditioned value, with the encoded terminal goal as one candidate, and switch or sample new candidates on demand |
 
 Group tasks that share simulator behavior in one family. For example, Scene uses the OGBench reset and step implementation in `tasks/ogbench_manipulation/environment.py`, and its preset selects the observation schema, goals and action limit. A new family can follow the PointMaze or dependency-grid layout and register its commands from a lightweight `cli.py`, so listing commands works without installing simulator extras.
 

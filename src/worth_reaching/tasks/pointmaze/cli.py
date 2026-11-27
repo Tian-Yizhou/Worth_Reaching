@@ -71,6 +71,37 @@ def _pointmaze_regions(args: argparse.Namespace) -> dict[str, object]:
     )
 
 
+def _pointmaze_options(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.models.gcivl import GCIVLConfig
+    from worth_reaching.models.option_value import OptionValueConfig
+    from worth_reaching.planning.options import PlannerConfig
+    from worth_reaching.tasks.pointmaze.options import MazeOptionConfig, run
+
+    config = MazeOptionConfig(
+        executor=GCIVLConfig(
+            updates=args.executor_updates, batch_size=args.executor_batch_size
+        ),
+        value=OptionValueConfig(
+            updates=args.value_updates,
+            options=args.value_options,
+            heads=args.value_heads,
+            time_costs=tuple(args.time_costs),
+        ),
+        planner=PlannerConfig(samples=args.samples, risk=args.risk, margin=args.margin),
+        eval_costs=tuple(args.eval_costs),
+    )
+    return run(
+        args.data_dir,
+        args.checkpoint,
+        args.out,
+        config,
+        split=args.eval_split,
+        repeats=args.eval_repeats,
+        workers=args.eval_workers,
+        trained=args.trained,
+    )
+
+
 def register_commands(commands) -> argparse.ArgumentParser:
     pointmaze = commands.add_parser(
         "pointmaze-latent",
@@ -158,4 +189,59 @@ def register_commands(commands) -> argparse.ArgumentParser:
     )
     regions.add_argument("--region-samples", type=int, default=32)
     regions.set_defaults(run=_pointmaze_regions, extra="pointmaze")
+    options = commands.add_parser(
+        "pointmaze-options",
+        help="Plan with latent options and a budget-conditioned value in PointMaze",
+    )
+    options.add_argument(
+        "--checkpoint",
+        type=Path,
+        required=True,
+        help="Budget directory of a pointmaze-latent run",
+    )
+    options.add_argument(
+        "--trained",
+        type=Path,
+        help="Reuse the executor and value of an earlier pointmaze-options run",
+    )
+    options.add_argument(
+        "--data-dir", type=Path, default=Path("results/datasets/minari")
+    )
+    options.add_argument("--out", type=Path, required=True)
+    options.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    options.add_argument("--eval-repeats", type=int, default=64)
+    options.add_argument("--eval-workers", type=int, default=1)
+    options.add_argument("--executor-updates", type=int, default=300_000)
+    options.add_argument("--executor-batch-size", type=int, default=1024)
+    options.add_argument("--value-updates", type=int, default=200_000)
+    options.add_argument("--value-options", type=int, default=1_000_000)
+    options.add_argument("--value-heads", type=int, default=4)
+    options.add_argument(
+        "--time-costs",
+        type=float,
+        nargs="+",
+        default=[0.0, 0.0005, 0.001, 0.002],
+        help="Per-action costs the value is trained on",
+    )
+    options.add_argument(
+        "--eval-costs",
+        type=float,
+        nargs="+",
+        default=[0.0, 0.001],
+        help="Time costs evaluated; ablations use the last",
+    )
+    options.add_argument("--samples", type=int, default=8)
+    options.add_argument(
+        "--risk",
+        type=float,
+        default=0.0,
+        help="Rank candidates by mean + risk x spread across value heads",
+    )
+    options.add_argument(
+        "--margin",
+        type=float,
+        default=1.0,
+        help="Value change, in spreads, that triggers a switch or new candidates",
+    )
+    options.set_defaults(run=_pointmaze_options, extra="pointmaze")
     return pointmaze

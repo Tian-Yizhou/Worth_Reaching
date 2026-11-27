@@ -314,6 +314,20 @@ Two bounds share the tracker and the schedule. `direct` tracks the terminal goal
 
 Train the world model with `--config configs/pointmaze/completion-scaled.toml`. It widens the codec, predictor and flow to 512 units and trains on 200,000 windows with about 50 times more updates than the development recipe. The original models put 20% to 54% of first targets inside walls.
 
+### Plan with latent options in Maze2D
+
+This is the first milestone of E2. It reads a frozen `pointmaze-latent` budget directory and trains two models on its archive: a latent-goal GCIVL executor whose goals are frozen encodings of archive observations, and a budget-conditioned option value. `--trained` reuses both from an earlier `pointmaze-options` run with the same recipe and world model, so planner settings can be evaluated without retraining. [Option value protocol](latent-subgoal-research.md#5-learn-budget-conditioned-option-value-in-latent-space)
+
+```bash
+uv run --no-sync wr pointmaze-options --checkpoint "$run_dir/models/medium-7" --out "$run_dir/options/medium-7" --eval-workers 32
+```
+
+Nothing defines an intermediate goal or its arrival. An option pursues a latent `z` for at most `k` actions. The value `Q(s, g, z, k, b, λ)` is fitted on hindsight options from the archive: every segment pursued the encoding of its end state, and the encoded relabeled goal is an option pursued for the whole budget. Targets are `1 − λd` on reaching the goal after `d` actions, `−λb` when the budget runs out, and `−λk + V` at the next state otherwise, with `V` an upper expectile of `Q` over the options the archive pursued. The time cost `λ` is a value input sampled from `--time-costs`. Four heads trained on bootstrap masks give a spread.
+
+At a decision the planner samples `--samples` flow routes, takes every query offset of every route as a candidate, adds the encoded terminal goal, and pursues the candidate with the highest mean value plus `--risk` times the spread. Each step it re-scores the current option and the cached candidates and switches when one is better by more than `--margin` spreads. It samples again when the option's duration runs out, its value drops by more than `--margin` spreads, or the encoded observation is farther from the chosen route's predicted latent than the 95th percentile on validation windows.
+
+The arms are `direct` (tracker toward the goal), `oracle` (shortest-path waypoints), `direct_latent` (the latent executor toward the encoded goal), `options@λ` for each `--eval-costs` value, and three ablations at the last cost: `no_goal` without the goal candidate, `no_interrupt` without switching or value and surprise triggers, and `fixed_duration` with only the first query offset. Each arm reports success, first success step, paired differences from `direct` and `direct_latent`, its share of the oracle gap, candidate generations and switches per episode, decisions by trigger, the share of decisions that chose the goal and the mean chosen duration. A smoke run uses `--eval-repeats 1 --executor-updates 2 --executor-batch-size 16 --value-updates 2 --value-options 64 --samples 2`.
+
 ## Run state-based OGBench Scene
 
 Install the locked `ogbench` extra and select a Lightning training extra. With the default compute configuration, `wr devices` reports the selected backend and all visible GPUs. The Scene executor and completion model both use the same Lightning training path. Evaluation steps the MuJoCo environment on the host. [Compute configuration](#compute-devices)
