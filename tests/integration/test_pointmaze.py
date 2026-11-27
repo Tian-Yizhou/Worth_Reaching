@@ -314,6 +314,12 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
             "64",
             "--samples",
             "2",
+            "--online-rounds",
+            "1",
+            "--online-episodes",
+            "2",
+            "--online-updates",
+            "2",
         ]
         subprocess.run(
             ["wr", "pointmaze-options", *tiny, "--out", options_out],
@@ -324,11 +330,20 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
         options_manifest = json.loads((options_out / "manifest.json").read_text())
         assert options_manifest["surprise_threshold"] > 0
         options_summary = json.loads((options_out / "summary.json").read_text())
-        planner = options_summary["arms"]["options@0.001"]
-        assert {"direct", "oracle", "direct_latent", "no_goal@0.001"} <= set(
-            options_summary["arms"]
-        )
+        planner = options_summary["arms"]["online/fast@0.001"]
+        assert {
+            "direct",
+            "oracle",
+            "direct_latent",
+            "offline/options@0",
+            "offline/fast@0.001",
+            "online/options@0.001",
+            "online/fast_no_goal@0.001",
+        } <= set(options_summary["arms"])
         assert planner["generations_per_episode"] >= 1
+        (collected,) = options_summary["rounds"]
+        assert collected["episodes"] == 2 and collected["attempts"] >= 2
+        assert (options_out / "executor-attempts.npz").is_file()
         assert options_summary["arms"]["direct_latent"]["goal_choice_share"] == 1
         reused = tmp_path / "options-reused"
         subprocess.run(

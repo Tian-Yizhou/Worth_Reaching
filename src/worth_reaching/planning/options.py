@@ -1,15 +1,17 @@
 """Choose, pursue and interrupt latent options with a budget-conditioned value.
 
-At a decision the world model samples latent futures at each of its query offsets.
-Every sample at offset `k` is a candidate option "pursue `z` for at most `k` actions",
-and the encoded terminal goal, pursued for the whole remaining budget, is one more
-candidate. The option value ranks them, by the mean over its heads plus `risk` times
-their spread, and one latent-goal executor pursues the choice. Nothing defines what a
-subgoal is or when it has been reached.
+At a decision the world model samples latent futures at each of its query offsets,
+under the remaining budget and optionally under shorter ones, which adds faster
+routes. Every sample at offset `k` is a candidate option "pursue `z` for at most `k`
+actions", and the encoded terminal goal, pursued for the whole remaining budget, is
+always one more candidate. The option value scores every candidate with the true
+remaining budget and ranks them by the mean over its heads plus `risk` times their
+spread. One latent-goal executor pursues the choice. Nothing defines what a subgoal is
+or when it has been reached.
 
 Each step the planner re-scores the current option with its remaining duration and
-the cached candidates from the current state, and switches when another beats it by
-more than `margin` times the spread. It samples new candidates only when the current
+the cached candidates, including the goal, and switches when another beats it by more
+than `margin` times the spread. It samples new candidates only when the current
 option's duration is spent, its value falls by more than `margin` times the spread from
 its value at selection, or the encoded observation departs from the latent path the
 chosen sample predicted.
@@ -42,6 +44,14 @@ class PlannerConfig:
     """Restrict durations to these query offsets, for a fixed-duration ablation."""
     surprise: float | None = None
     """Squared latent distance from the predicted path that triggers new candidates."""
+    proposal_budgets: tuple[float, ...] = (1.0,)
+    """Fractions of the remaining budget the world model is conditioned on when it
+    samples candidates. Shorter budgets give faster routes; the value still scores every
+    candidate with the true remaining budget."""
+    explore: float = 0.0
+    """Probability of pursuing a random candidate at a decision, for collecting the
+    executor's attempts. The draw is uniform over candidate sources (each proposal
+    budget and the terminal goal), then uniform within the source."""
 
     def __post_init__(self) -> None:
         if (
@@ -51,6 +61,9 @@ class PlannerConfig:
             or not (self.subgoals or self.goal_candidate)
             or (self.slots is not None and not self.slots)
             or (self.surprise is not None and self.surprise <= 0)
+            or not self.proposal_budgets
+            or not all(0 < fraction <= 1 for fraction in self.proposal_budgets)
+            or not 0 <= self.explore <= 1
         ):
             raise ValueError(
                 "Use a non-negative time cost and margin, positive samples and at "
@@ -67,6 +80,8 @@ class Option:
     goal: bool = False
     path: tuple[tuple[int, np.ndarray], ...] = ()
     """Predicted latents at earlier offsets, as (step, latent)."""
+    source: int = -1
+    """The proposal budget that produced the candidate; -1 for the terminal goal."""
 
 
 @dataclass(slots=True)
@@ -82,6 +97,8 @@ class PlannerLog:
     switches: int = 0
     triggers: dict[str, int] = field(default_factory=dict)
     """New decisions by cause: start, duration, value or surprise."""
+    pursued: list[tuple[int, np.ndarray]] = field(default_factory=list)
+    """Each option the executor started pursuing, as (step, latent)."""
     decisions: list[dict] = field(default_factory=list)
 
 
@@ -161,6 +178,7 @@ class OptionPlanner:
             chosen.duration, chosen.start = self._left(chosen, remaining), self.step
             self.current = Selected(chosen, float(utility[best]), float(spread[best]))
             self.log.switches += 1
+            self.log.pursued.append((self.step, chosen.latent))
         return None
 
     def _score(self, state, target, options: list[Option], remaining: int):
@@ -185,11 +203,21 @@ class OptionPlanner:
         heads = self._score(state, target, options, remaining)
         utility = heads.mean(axis=0) + config.risk * heads.std(axis=0)
         best = int(np.argmax(utility))
+        if config.explore:
+            rng = np.random.default_rng(stream_seed(self.key, self.step, 2))
+            if rng.random() < config.explore:
+                sources = sorted({option.source for option in options})
+                source = sources[int(rng.integers(len(sources)))]
+                members = [
+                    i for i, option in enumerate(options) if option.source == source
+                ]
+                best = members[int(rng.integers(len(members)))]
         chosen = options[best]
         self.current = Selected(
             chosen, float(utility[best]), float(heads[:, best].std())
         )
         self.cache = options
+        self.log.pursued.append((self.step, chosen.latent))
         self.log.decisions.append(
             {
                 "step": self.step,
@@ -197,33 +225,41 @@ class OptionPlanner:
                 "duration": chosen.duration,
                 "goal": chosen.goal,
                 "value": float(utility[best]),
+                "goal_value": float(utility[-1]) if config.goal_candidate else None,
             }
         )
 
     def _propose(self, goal, remaining) -> list[Option]:
-        completion = self.completion
-        context = completion_context(
-            list(self.history), goal, remaining, completion.config
-        )
-        routes, _ = completion.propose(
-            context, stream_seed(self.key, self.step), candidates=self.config.samples
-        )
-        offsets = np.maximum(context.offsets[0], 1)
-        slots = self.config.slots or range(len(offsets))
-        return [
-            Option(
-                route[slot].astype(np.float32),
-                int(offsets[slot]),
-                self.step,
-                path=tuple(
-                    (self.step + int(offsets[earlier]), route[earlier])
-                    for earlier in range(slot)
-                ),
+        completion, options = self.completion, []
+        queries = completion.config.queries
+        for index, fraction in enumerate(self.config.proposal_budgets):
+            budget = max(min(remaining, queries + 1), round(remaining * fraction))
+            context = completion_context(
+                list(self.history), goal, budget, completion.config
             )
-            for route in routes[0]
-            for slot in slots
-            if slot < len(offsets)
-        ]
+            routes, _ = completion.propose(
+                context,
+                stream_seed(self.key, self.step, index),
+                candidates=self.config.samples,
+            )
+            offsets = np.maximum(context.offsets[0], 1)
+            slots = self.config.slots or range(len(offsets))
+            options += [
+                Option(
+                    route[slot].astype(np.float32),
+                    int(offsets[slot]),
+                    self.step,
+                    path=tuple(
+                        (self.step + int(offsets[earlier]), route[earlier])
+                        for earlier in range(slot)
+                    ),
+                    source=index,
+                )
+                for route in routes[0]
+                for slot in slots
+                if slot < len(offsets)
+            ]
+        return options
 
 
 def surprise_threshold(completion, batch, seed: int, quantile: float) -> float:

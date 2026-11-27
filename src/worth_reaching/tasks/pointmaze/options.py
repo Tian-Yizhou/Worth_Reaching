@@ -2,10 +2,17 @@
 
 A frozen pointmaze-latent run supplies the world model. This runner trains a latent-goal
 GCIVL executor on frozen encodings of archive states and an option value on hindsight
-options from the same archive, or reuses both from an earlier run. Each arm then plays
-the official resets in closed loop. Nothing defines intermediate goals or arrival: the
-planner picks among sampled latent futures and the encoded terminal goal, and the
-executor pursues the choice until the planner switches or samples again.
+options from the same archive, or reuses both from an earlier run. The archive never
+pursued the terminal goal on purpose, so the offline value misjudges options the
+executor would pursue. Online rounds therefore run the planner on training resets,
+pursuing a random candidate at some decisions, and continue fitting the value on the
+executor's attempts mixed with the hindsight options.
+
+Each arm then plays the development resets in closed loop. Nothing defines
+intermediate goals or arrival: the planner picks among sampled latent futures and the
+encoded terminal goal, and the executor pursues the choice until the planner switches
+or samples again. The offline and corrected values are each evaluated with routes
+proposed under the remaining budget only and under shorter budgets as well.
 
 Direct tracking of the terminal goal with Diffuser's position and velocity tracker is
 the floor and a privileged shortest-path oracle is the ceiling, as in E1. Direct
@@ -16,6 +23,7 @@ import gzip
 import json
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
+from functools import partial
 from hashlib import sha256
 from importlib.metadata import version
 from multiprocessing import get_context
@@ -33,13 +41,20 @@ from worth_reaching.evaluation.closed_loop import (
     Controls,
     RegionModels,
 )
+from worth_reaching.evaluation.options import (
+    OFFLINE,
+    ONLINE,
+    Arm,
+    OptionRunConfig,
+    option_arms,
+)
 from worth_reaching.models.gcivl import GCIVL, GCIVLConfig, fit_gcivl
 from worth_reaching.models.option_value import (
     NEVER,
     OptionValue,
-    OptionValueConfig,
     fit_option_value,
     label_options,
+    value_range,
 )
 from worth_reaching.models.training import (
     describe,
@@ -51,7 +66,6 @@ from worth_reaching.models.training import (
 )
 from worth_reaching.planning.options import (
     OptionPlanner,
-    PlannerConfig,
     surprise_threshold,
 )
 from worth_reaching.tasks.pointmaze.dataset import (
@@ -70,39 +84,38 @@ from worth_reaching.tasks.pointmaze.experiment import rollout, track
 from worth_reaching.tasks.pointmaze.geometry import MazeGeometry
 from worth_reaching.tasks.pointmaze.spec import TASKS
 
-SCHEMA = "pointmaze_options_v1"
+SCHEMA = "pointmaze_options_v2"
 WEIGHTS_FILE = "option-weights.pt"
+TRAIN_SEED_BASE = 9001
+"""Training resets for online rounds, disjoint from the development and test seeds."""
 
 
 @dataclass(frozen=True, slots=True)
-class MazeOptionConfig:
+class MazeOptionConfig(OptionRunConfig):
     executor: GCIVLConfig = field(default_factory=lambda: GCIVLConfig(updates=300_000))
-    value: OptionValueConfig = field(default_factory=OptionValueConfig)
-    planner: PlannerConfig = field(default_factory=PlannerConfig)
-    eval_costs: tuple[float, ...] = (0.0, 0.001)
-    """Time costs evaluated with the full planner; ablations use the last."""
-    surprise_quantile: float = 0.95
     oracle_cells: int = 1
     oracle_speed: float = 2.0
 
     def __post_init__(self) -> None:
+        OptionRunConfig.__post_init__(self)
         if (
-            not self.eval_costs
-            or not set(self.eval_costs) <= set(self.value.time_costs)
-            or not 0 < self.surprise_quantile < 1
-            or self.oracle_cells < 1
+            self.oracle_cells < 1
             or self.oracle_speed <= 0
+            or self.online.rounds * self.online.episodes
+            > SEED_BASE["dev"] - TRAIN_SEED_BASE
         ):
             raise ValueError(
-                "Evaluate time costs the value was trained on, with a surprise "
-                "quantile in (0, 1) and a positive oracle"
+                "Use a positive oracle and keep training resets below the "
+                "development seeds"
             )
 
     @property
     def recipe(self) -> dict:
-        """The settings that determine the trained executor and value."""
-        settings = {"executor": asdict(self.executor), "value": asdict(self.value)}
-        return json.loads(json.dumps(settings))
+        """The settings that determine the trained executor and values."""
+        return {
+            "executor": json.loads(json.dumps(asdict(self.executor))),
+            **OptionRunConfig.recipe.fget(self),
+        }
 
 
 def reached(states: np.ndarray, goals: np.ndarray) -> np.ndarray:
@@ -110,23 +123,8 @@ def reached(states: np.ndarray, goals: np.ndarray) -> np.ndarray:
     return np.linalg.norm(states[..., :2] - goals[..., :2], axis=-1) <= GOAL_RADIUS
 
 
-def arms(config: MazeOptionConfig) -> dict[str, PlannerConfig | str]:
-    """Bounds, direct latent pursuit, the planner per time cost and its ablations."""
-    planner = config.planner
-    cost = config.eval_costs[-1]
-    result: dict[str, PlannerConfig | str] = {
-        shared.DIRECT: shared.DIRECT,
-        ORACLE: ORACLE,
-        shared.DIRECT_LATENT: replace(
-            planner, time_cost=cost, subgoals=False, goal_candidate=True
-        ),
-    }
-    for value in config.eval_costs:
-        result[f"options@{value:g}"] = replace(planner, time_cost=value)
-    result[f"no_goal@{cost:g}"] = replace(planner, time_cost=cost, goal_candidate=False)
-    result[f"no_interrupt@{cost:g}"] = replace(planner, time_cost=cost, interrupt=False)
-    result[f"fixed_duration@{cost:g}"] = replace(planner, time_cost=cost, slots=(0,))
-    return result
+def arms(config: MazeOptionConfig) -> dict[str, Arm]:
+    return option_arms(config, (shared.DIRECT, ORACLE))
 
 
 def _archive(trajectories, fingerprint: str) -> StateArchive:
@@ -141,19 +139,8 @@ def _archive(trajectories, fingerprint: str) -> StateArchive:
     )
 
 
-def _train(frozen: FrozenRun, train, validation, limit, config, out, fingerprint):
-    model = frozen.model
-    seed = model.config.seed
-    latents = model.encode_observations(train.observations)
-    executor = fit_gcivl(
-        _archive(train, fingerprint),
-        ACTION_SIZE,
-        config.executor,
-        seed=seed,
-        out=out / "checkpoints" / "executor",
-        goal_features=latents,
-    )
-    options = label_options(
+def _label(model, train, limit, config):
+    return label_options(
         train,
         reached,
         config.value.options,
@@ -161,7 +148,19 @@ def _train(frozen: FrozenRun, train, validation, limit, config, out, fingerprint
         max_horizon=model.config.max_horizon,
         queries=model.config.queries,
         config=config.value,
-        rng=np.random.default_rng([seed, 7100]),
+        rng=np.random.default_rng([model.config.seed, 7100]),
+    )
+
+
+def _train(frozen, train, latents, options, limit, config, out, fingerprint):
+    seed = frozen.model.config.seed
+    executor = fit_gcivl(
+        _archive(train, fingerprint),
+        ACTION_SIZE,
+        config.executor,
+        seed=seed,
+        out=out / "checkpoints" / "executor",
+        goal_features=latents,
     )
     value = fit_option_value(
         options,
@@ -171,19 +170,7 @@ def _train(frozen: FrozenRun, train, validation, limit, config, out, fingerprint
         seed=seed,
         out=out / "checkpoints" / "value",
     )
-    save_weights(
-        out / WEIGHTS_FILE, {"executor": weights(executor), "value": weights(value)}
-    )
-    arrived = options.first <= np.minimum(options.durations, options.budgets)
-    return (
-        executor,
-        value,
-        {
-            "labeled_options": len(options.first),
-            "labeled_arrival_share": float(arrived.mean()),
-            "labeled_goal_reached_share": float((options.first < NEVER).mean()),
-        },
-    )
+    return executor, value
 
 
 def _load(trained: Path, frozen: FrozenRun, limit: int, config: MazeOptionConfig):
@@ -197,17 +184,20 @@ def _load(trained: Path, frozen: FrozenRun, limit: int, config: MazeOptionConfig
     values = load_weights(trained / WEIGHTS_FILE)
     latent_size = frozen.model.config.latent_size
     executor = GCIVL(OBSERVATION_SIZE, latent_size, ACTION_SIZE, config.executor)
-    value = OptionValue(latent_size, limit, config.value)
     restore_weights(executor, values["executor"])
-    restore_weights(value, values["value"])
-    return executor, value, manifest.get("training", {})
+    restored = {}
+    for name in (OFFLINE, ONLINE):
+        restored[name] = restore_weights(
+            OptionValue(latent_size, limit, config.value), values[name]
+        )
+    return executor, restored, manifest.get("rounds", [])
 
 
 _WORKER: dict = {}
 
 
 def _start_worker(
-    data_dir, task_name, completion, executor, value, arm_configs, config, limit
+    data_dir, task_name, completion, executor, values, arm_configs, config, limit
 ):
     torch.set_num_threads(1)
     task = TASKS[task_name]
@@ -218,7 +208,7 @@ def _start_worker(
         env=env,
         completion=completion,
         executor=executor,
-        value=value,
+        values=values,
         arms=arm_configs,
         limit=limit,
         oracle=Controls(
@@ -234,7 +224,8 @@ def _start_worker(
 
 
 def _policy(arm: str, seed: int):
-    worker, setting = _WORKER, _WORKER["arms"][arm]
+    worker = _WORKER
+    value, setting = worker["arms"][arm]
     completion, limit = worker["completion"], worker["limit"]
     key = stream_seed(completion.config.seed, seed, list(worker["arms"]).index(arm))
     if setting == shared.DIRECT:
@@ -253,7 +244,7 @@ def _policy(arm: str, seed: int):
         )
     return OptionPlanner(
         completion,
-        worker["value"],
+        worker["values"][value],
         worker["executor"].act,
         key,
         limit,
@@ -262,23 +253,105 @@ def _policy(arm: str, seed: int):
     )
 
 
-def _play(batch: list[tuple[str, int]]) -> list[dict]:
-    rows = []
+def _play(batch: list[tuple[str, int]], collect: bool = False):
+    rows, collected = [], []
+    env, limit = _WORKER["env"], _WORKER["limit"]
     for arm, seed in batch:
         policy = _policy(arm, seed)
-        outcome, _ = rollout(_WORKER["env"], seed, _WORKER["limit"], policy)
+        outcome, trajectory = rollout(env, seed, limit, policy)
+        first = outcome["first_success_step"]
         rows.append(
             shared.record(
-                arm,
-                seed,
-                None,
-                policy,
-                outcome["success"],
-                outcome["steps"],
-                outcome["first_success_step"],
+                arm, seed, None, policy, outcome["success"], outcome["steps"], first
             )
         )
-    return rows
+        if collect:
+            goal = np.asarray(outcome["goal"], dtype=np.float32)
+            attempt = shared.attempts(policy, trajectory, goal, first, limit)
+            if attempt is not None:
+                collected.append(attempt)
+    return rows, collected
+
+
+def _pool(
+    workers,
+    data_dir,
+    task_name,
+    completion,
+    executor,
+    values,
+    arm_configs,
+    config,
+    limit,
+):
+    return ProcessPoolExecutor(
+        workers,
+        mp_context=get_context("spawn"),
+        initializer=_start_worker,
+        initargs=(
+            data_dir,
+            task_name,
+            completion,
+            executor,
+            values,
+            arm_configs,
+            config,
+            limit,
+        ),
+    )
+
+
+def _correct(
+    frozen,
+    task_name,
+    data_dir,
+    executor,
+    offline,
+    options,
+    latents,
+    limit,
+    config,
+    surprise,
+    workers,
+    out,
+):
+    """Collect the executor's attempts on training resets and correct the value."""
+    episodes = config.online.episodes
+    arm_configs = {"collect": (ONLINE, replace(config.collection, surprise=surprise))}
+
+    def collect(value, index):
+        seeds = range(
+            TRAIN_SEED_BASE + index * episodes, TRAIN_SEED_BASE + (index + 1) * episodes
+        )
+        planned = [("collect", seed) for seed in seeds]
+        shards = [planned[i::workers] for i in range(workers)]
+        with _pool(
+            len(shards),
+            data_dir,
+            task_name,
+            frozen.model,
+            executor,
+            {ONLINE: value},
+            arm_configs,
+            config,
+            limit,
+        ) as pool:
+            results = list(pool.map(partial(_play, collect=True), shards))
+        return (
+            [row for shard, _ in results for row in shard],
+            [attempt for _, shard in results for attempt in shard],
+        )
+
+    return shared.correct(
+        collect,
+        offline,
+        options,
+        latents,
+        limit,
+        config,
+        seed=lambda index: stream_seed(frozen.model.config.seed, 7300, index),
+        out=out,
+    )
 
 
 def run(
@@ -303,14 +376,6 @@ def run(
         raise ValueError("Dataset files disagree with the frozen run")
     train, validation, _ = split_trajectories(dataset)
     out.mkdir(parents=True, exist_ok=False)
-    if trained is None:
-        executor, value, training = _train(
-            frozen, train, validation, limit, config, out, hashes["main_data.hdf5"]
-        )
-        weights_path = out / WEIGHTS_FILE
-    else:
-        executor, value, training = _load(trained, frozen, limit, config)
-        weights_path = trained / WEIGHTS_FILE
     model = frozen.model
     windows = validation.sample_windows(
         np.random.default_rng(801),
@@ -323,6 +388,52 @@ def run(
     surprise = surprise_threshold(
         model, windows, stream_seed(model.config.seed, 7200), config.surprise_quantile
     )
+    if trained is None:
+        latents = model.encode_observations(train.observations)
+        options = _label(model, train, limit, config)
+        executor, offline = _train(
+            frozen,
+            train,
+            latents,
+            options,
+            limit,
+            config,
+            out,
+            hashes["main_data.hdf5"],
+        )
+        online, rounds = _correct(
+            frozen,
+            manifest["task"],
+            data_dir,
+            executor,
+            offline,
+            options,
+            latents,
+            limit,
+            config,
+            surprise,
+            workers,
+            out,
+        )
+        values = {OFFLINE: offline, ONLINE: online}
+        save_weights(
+            out / WEIGHTS_FILE,
+            {"executor": weights(executor)}
+            | {name: weights(value) for name, value in values.items()},
+        )
+        weights_path = out / WEIGHTS_FILE
+        labeled = {
+            "labeled_options": int(len(options.first)),
+            "labeled_goal_reached_share": float((options.first < NEVER).mean()),
+            "offline_value_range": value_range(
+                offline.eval(), options, latents, config.eval_costs[-1]
+            ),
+        }
+    else:
+        executor, values, rounds = _load(trained, frozen, limit, config)
+        weights_path = trained / WEIGHTS_FILE
+        labeled = json.loads((trained / "manifest.json").read_text())["labels"]
+    recipe = config.recipe
     config = replace(config, planner=replace(config.planner, surprise=surprise))
     arm_configs = arms(config)
     seeds = list(range(SEED_BASE[split], SEED_BASE[split] + repeats))
@@ -347,16 +458,24 @@ def run(
             "source_weights_sha256": frozen.weights_sha256,
             "trained_run": str(trained) if trained else None,
             "weights_sha256": sha256(weights_path.read_bytes()).hexdigest(),
-            "recipe": config.recipe,
-            "training": training,
+            "recipe": recipe,
+            "labels": labeled,
+            "rounds": rounds,
+            "training_resets": [
+                TRAIN_SEED_BASE,
+                TRAIN_SEED_BASE + config.online.rounds * config.online.episodes,
+            ],
             "planner": asdict(config.planner),
             "surprise_threshold": surprise,
             "action_limit": limit,
             "split": split,
             "seeds": seeds,
             "arms": {
-                name: setting if isinstance(setting, str) else asdict(setting)
-                for name, setting in arm_configs.items()
+                name: {
+                    "value": value,
+                    "planner": setting if isinstance(setting, str) else asdict(setting),
+                }
+                for name, (value, setting) in arm_configs.items()
             },
             "compute": {**describe(), "eval_workers": workers},
             "code_revision": code_revision(),
@@ -364,28 +483,25 @@ def run(
     )
     planned = [(arm, seed) for seed in seeds for arm in arm_configs]
     shards = [planned[index::workers] for index in range(workers)]
-    with ProcessPoolExecutor(
+    with _pool(
         len(shards),
-        mp_context=get_context("spawn"),
-        initializer=_start_worker,
-        initargs=(
-            data_dir,
-            manifest["task"],
-            model,
-            executor,
-            value,
-            arm_configs,
-            config,
-            limit,
-        ),
+        data_dir,
+        manifest["task"],
+        model,
+        executor,
+        values,
+        arm_configs,
+        config,
+        limit,
     ) as pool:
-        rows = [row for shard in pool.map(_play, shards) for row in shard]
+        rows = [row for shard, _ in pool.map(_play, shards) for row in shard]
     rows.sort(key=lambda row: (row["arm"], row["seed"]))
     with gzip.open(out / "attempts.jsonl.gz", "wt", encoding="utf-8") as stream:
         for row in rows:
             stream.write(json.dumps(row, separators=(",", ":")) + "\n")
     summary = {
-        "training": training,
+        "labels": labeled,
+        "rounds": rounds,
         "surprise_threshold": surprise,
         "evaluation_environment_steps": sum(row["steps"] for row in rows),
         **shared.summarize(rows),

@@ -58,6 +58,7 @@ def test_option_value_trains_and_scores_candidates_per_head(tmp_path):
         OptionValueConfig,
         fit_option_value,
         label_options,
+        value_range,
     )
 
     archive = _line_archive(np)
@@ -86,6 +87,37 @@ def test_option_value_trains_and_scores_candidates_per_head(tmp_path):
         0.001,
     )
     assert scores.shape == (3, 3) and np.isfinite(scores).all()
+    ranges = value_range(value, options, archive.observations, 0.001, size=64)
+    assert len(ranges["all"]) == len(ranges["quantiles"])
+
+
+def test_backup_clips_the_following_value_to_reachable_returns():
+    pytest.importorskip("numpy")
+    torch = pytest.importorskip("torch")
+    from worth_reaching.models.option_value import (
+        NEVER,
+        OptionValue,
+        OptionValueConfig,
+        option_value_loss,
+    )
+
+    model = OptionValue(2, 20, OptionValueConfig(width=8, depth=1, heads=2))
+    latent = torch.zeros(4, 2)
+    duration = torch.tensor([5, 5, 5, 5])
+    budget = torch.tensor([20, 20, 20, 3])
+    first = torch.tensor([NEVER, NEVER, 4, NEVER])
+    cost = torch.full((4,), 0.01)
+    mask = torch.ones(4, 2, dtype=torch.bool)
+    for following, expected in (
+        (50.0, [-0.05 + 0.99, -0.05 + 0.99, 0.96, -0.03]),
+        (-50.0, [-0.2, -0.2, 0.96, -0.03]),
+    ):
+        model.state = lambda *_, value=following: torch.full((2, 4), value)
+        (error, _), _ = option_value_loss(
+            model, (latent, latent, latent, latent, duration, budget, first, cost, mask)
+        )
+        q = model.option(latent, latent, latent, duration, budget, cost).T
+        assert torch.allclose(q - error, torch.tensor(expected)[:, None], atol=1e-5)
 
 
 def test_planner_switches_to_a_cached_candidate_and_falls_back_to_the_goal():
@@ -131,3 +163,35 @@ def test_planner_switches_to_a_cached_candidate_and_falls_back_to_the_goal():
         planner(np.zeros(2, np.float32), goal)
     # The switched option's duration ran out, so the planner decided again.
     assert planner.log.triggers.get("duration") == 1
+
+
+def test_attempts_split_an_episode_at_each_pursued_option_and_stop_at_success():
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("torch")
+    from types import SimpleNamespace
+
+    from worth_reaching.evaluation.options import attempts
+    from worth_reaching.models.option_value import NEVER
+
+    def encode(values):
+        return np.asarray(values, np.float32)[:, :1] * 10
+
+    trajectory = np.arange(11, dtype=np.float32)[:, None].repeat(2, axis=1)
+    latents = [np.full(1, value, np.float32) for value in (1, 2, 3)]
+    policy = SimpleNamespace(
+        completion=SimpleNamespace(encode_observations=encode),
+        log=SimpleNamespace(pursued=list(zip((0, 4, 9), latents, strict=True))),
+    )
+    goal = np.full(2, 7, np.float32)
+    found = attempts(policy, trajectory, goal, 6, limit=20)
+    # The option started at step 9 began after the success at step 6.
+    np.testing.assert_array_equal(found.durations, [4, 2])
+    np.testing.assert_array_equal(found.budgets, [20, 16])
+    np.testing.assert_array_equal(found.first, [NEVER, 2])
+    np.testing.assert_array_equal(found.states[:, 0], [0, 40])
+    np.testing.assert_array_equal(found.landings[:, 0], [40, 60])
+    np.testing.assert_array_equal(found.targets[:, 0], [1, 2])
+    np.testing.assert_array_equal(found.goals[:, 0], [70, 70])
+    unfinished = attempts(policy, trajectory, goal, None, limit=20)
+    np.testing.assert_array_equal(unfinished.durations, [4, 5, 1])
+    assert np.all(unfinished.first == NEVER)

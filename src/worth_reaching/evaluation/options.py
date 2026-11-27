@@ -1,10 +1,223 @@
-"""Record and summarize option-planner episodes against direct execution."""
+"""Configure, correct, record and summarize option-planner runs in any task.
+
+A task supplies the environment, the executor and the bounds. This module holds what
+the Maze2D and Scene runs share: the online-correction rounds that continue fitting the
+option value on the executor's attempts, the arms that compare the offline and
+corrected values with and without shorter-budget proposals, and the per-arm summary.
+"""
+
+import argparse
+import json
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, field, replace
+from pathlib import Path
 
 import numpy as np
 
-from worth_reaching.planning.options import OptionPlanner
+from worth_reaching.models.option_value import (
+    NEVER,
+    HindsightOptions,
+    OptionAttempts,
+    OptionValue,
+    OptionValueConfig,
+    fit_option_value,
+    value_range,
+)
+from worth_reaching.models.training import restore_weights, weights
+from worth_reaching.planning.options import OptionPlanner, PlannerConfig
 
 DIRECT, ORACLE, DIRECT_LATENT = "direct", "oracle", "direct_latent"
+OFFLINE, ONLINE = "offline", "online"
+ATTEMPTS_FILE = "executor-attempts.npz"
+
+
+@dataclass(frozen=True, slots=True)
+class OnlineConfig:
+    rounds: int = 3
+    episodes: int = 256
+    """Training resets per round."""
+    explore: float = 0.2
+    """Probability of pursuing a uniformly drawn candidate at a decision."""
+    updates: int = 50_000
+    """Value updates per round, continuing from the previous value."""
+    online_share: float = 0.5
+    """Share of each batch drawn from the executor's attempts."""
+
+    def __post_init__(self) -> None:
+        if (
+            min(self.episodes, self.updates) < 1
+            or self.rounds < 0
+            or not 0 <= self.explore <= 1
+            or not 0 < self.online_share <= 1
+        ):
+            raise ValueError(
+                "Use non-negative rounds, positive episodes and updates, and shares "
+                "in (0, 1]"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class OptionRunConfig:
+    value: OptionValueConfig = field(default_factory=OptionValueConfig)
+    online: OnlineConfig = field(default_factory=OnlineConfig)
+    planner: PlannerConfig = field(default_factory=PlannerConfig)
+    fast_budgets: tuple[float, ...] = (1.0, 0.5, 0.25)
+    """Budget fractions for the arms that also propose faster routes."""
+    eval_costs: tuple[float, ...] = (0.0, 0.001)
+    """Time costs evaluated with the full planner; collection and ablations use the
+    last."""
+    surprise_quantile: float = 0.95
+
+    def __post_init__(self) -> None:
+        if (
+            not self.eval_costs
+            or not set(self.eval_costs) <= set(self.value.time_costs)
+            or not 0 < self.surprise_quantile < 1
+        ):
+            raise ValueError(
+                "Evaluate time costs the value was trained on, with a surprise "
+                "quantile in (0, 1)"
+            )
+
+    @property
+    def recipe(self) -> dict:
+        """The settings that determine the trained values."""
+        settings = {
+            "value": asdict(self.value),
+            "online": asdict(self.online),
+            "collection": asdict(self.collection),
+        }
+        return json.loads(json.dumps(settings))
+
+    @property
+    def collection(self) -> PlannerConfig:
+        return replace(
+            self.planner,
+            time_cost=self.eval_costs[-1],
+            proposal_budgets=self.fast_budgets,
+            explore=self.online.explore,
+        )
+
+
+Arm = tuple[str, PlannerConfig | str]
+"""The value an arm plans with, and its planner settings or a bound's name."""
+
+
+def option_arms(config: OptionRunConfig, bounds: tuple[str, ...]) -> dict[str, Arm]:
+    """Bounds, direct latent pursuit, both values with and without faster routes, and
+    ablations of the corrected value with faster routes."""
+    planner, cost = config.planner, config.eval_costs[-1]
+    fast = replace(planner, time_cost=cost, proposal_budgets=config.fast_budgets)
+    result: dict[str, Arm] = {bound: (ONLINE, bound) for bound in bounds}
+    result[DIRECT_LATENT] = (ONLINE, replace(planner, time_cost=cost, subgoals=False))
+    for value in (OFFLINE, ONLINE):
+        for setting in config.eval_costs:
+            result[f"{value}/options@{setting:g}"] = (
+                value,
+                replace(planner, time_cost=setting),
+            )
+        result[f"{value}/fast@{cost:g}"] = (value, fast)
+    result[f"online/fast_no_goal@{cost:g}"] = (
+        ONLINE,
+        replace(fast, goal_candidate=False),
+    )
+    result[f"online/fast_no_interrupt@{cost:g}"] = (
+        ONLINE,
+        replace(fast, interrupt=False),
+    )
+    result[f"online/fast_fixed_duration@{cost:g}"] = (ONLINE, replace(fast, slots=(0,)))
+    return result
+
+
+Collect = Callable[[OptionValue, int], tuple[list[dict], list[OptionAttempts]]]
+"""Play one round of training resets with a value; return rows and attempts."""
+
+
+def correct(
+    collect: Collect,
+    offline: OptionValue,
+    options: HindsightOptions,
+    latents: np.ndarray,
+    limit: int,
+    config: OptionRunConfig,
+    *,
+    seed: Callable[[int], int],
+    out: Path,
+) -> tuple[OptionValue, list[dict]]:
+    """Collect the executor's attempts in rounds and continue fitting the value."""
+    online = config.online
+    value = restore_weights(
+        OptionValue(latents.shape[-1], limit, config.value), weights(offline)
+    )
+    gathered: list[OptionAttempts] = []
+    rounds = []
+    for index in range(online.rounds):
+        rows, collected = collect(value.eval(), index)
+        gathered += collected
+        attempts = OptionAttempts.concatenate(gathered)
+        rounds.append(_round(index, rows, attempts))
+        value = fit_option_value(
+            options,
+            latents,
+            limit,
+            config.value,
+            seed=seed(index),
+            out=out / "checkpoints" / f"value-round-{index}",
+            attempts=attempts,
+            online_share=online.online_share,
+            model=value,
+            updates=online.updates,
+        )
+        rounds[-1]["value_range"] = value_range(
+            value.eval(), options, latents, config.eval_costs[-1]
+        )
+    if gathered:
+        attempts = OptionAttempts.concatenate(gathered)
+        np.savez_compressed(
+            out / ATTEMPTS_FILE,
+            **{name: getattr(attempts, name) for name in OptionAttempts.__slots__},
+        )
+    return value.eval(), rounds
+
+
+def _round(index: int, rows: list[dict], attempts: OptionAttempts) -> dict:
+    successes = [row["first_success_step"] for row in rows if row["success"]]
+    decisions = sum(row["decisions"] for row in rows)
+    return {
+        "round": index,
+        "episodes": len(rows),
+        "environment_steps": sum(row["steps"] for row in rows),
+        "success": float(np.mean([row["success"] for row in rows])),
+        "mean_first_success_step": float(np.mean(successes)) if successes else None,
+        "goal_choice_share": sum(row["goal_choices"] for row in rows) / decisions
+        if decisions
+        else None,
+        "attempts": len(attempts),
+        "attempt_arrival_share": float(np.mean(attempts.first < NEVER)),
+    }
+
+
+def settings(args: argparse.Namespace) -> dict:
+    """`OptionRunConfig` fields from the options of `recipes.add_option_arguments`."""
+    return {
+        "value": OptionValueConfig(
+            updates=args.value_updates,
+            options=args.value_options,
+            heads=args.value_heads,
+            time_costs=tuple(args.time_costs),
+        ),
+        "online": OnlineConfig(
+            rounds=args.online_rounds,
+            episodes=args.online_episodes,
+            explore=args.explore,
+            updates=args.online_updates,
+        ),
+        "planner": PlannerConfig(
+            samples=args.samples, risk=args.risk, margin=args.margin
+        ),
+        "fast_budgets": tuple(args.fast_budgets),
+        "eval_costs": tuple(args.eval_costs),
+    }
 
 
 def record(arm: str, seed: int, task, policy, success: bool, steps: int, first):
@@ -29,9 +242,56 @@ def record(arm: str, seed: int, task, policy, success: bool, steps: int, first):
             "mean_duration": float(np.mean([d["duration"] for d in before]))
             if before
             else None,
+            "mean_value": float(np.mean([d["value"] for d in before]))
+            if before
+            else None,
+            "mean_goal_gap": float(
+                np.mean([d["value"] - d["goal_value"] for d in gaps])
+            )
+            if (gaps := [d for d in before if d["goal_value"] is not None])
+            else None,
             "first_decision": decisions[0] if decisions else None,
         }
     return row
+
+
+def attempts(
+    policy: OptionPlanner, trajectory: np.ndarray, goal: np.ndarray, first, limit: int
+) -> OptionAttempts | None:
+    """The options an episode pursued until its first success, with their outcomes.
+
+    `trajectory[t]` is the observation after `t` actions and `first` the action count at
+    the first success. An option started at step `s` and replaced at step `e` covers
+    observations `s + 1` to `e`; the one that contains the success stops there.
+    """
+    pursued = policy.log.pursued
+    if not pursued:
+        return None
+    starts = np.array([step for step, _ in pursued])
+    stop = NEVER if first is None else first
+    ends = np.minimum(np.append(starts[1:], len(trajectory) - 1), stop)
+    keep = np.flatnonzero((starts < stop) & (ends > starts))
+    if not len(keep):
+        return None
+    starts, ends = starts[keep], ends[keep]
+    latents = np.stack([latent for _, latent in pursued])[keep]
+    encode = policy.completion.encode_observations
+    arrived = (starts < stop) & (stop <= ends)
+    return OptionAttempts(
+        encode(trajectory[starts]),
+        np.repeat(encode(goal[None]), len(starts), axis=0),
+        latents.astype(np.float32),
+        encode(trajectory[ends]),
+        (ends - starts).astype(np.int32),
+        (limit - starts).astype(np.int32),
+        np.where(arrived, stop - starts, NEVER).astype(np.int32),
+    )
+
+
+def _mean(values) -> float | None:
+    """Mean over the episodes that have a value."""
+    present = [value for value in values if value is not None]
+    return float(np.mean(present)) if present else None
 
 
 def summarize(rows: list[dict], *, bootstrap_seed: int = 20) -> dict:
@@ -76,6 +336,8 @@ def summarize(rows: list[dict], *, bootstrap_seed: int = 20) -> dict:
                 "mean_chosen_duration": float(np.mean(durations))
                 if durations
                 else None,
+                "mean_chosen_value": _mean(t["mean_value"] for t in trials),
+                "mean_gap_over_goal": _mean(t["mean_goal_gap"] for t in trials),
             }
         for reference in (DIRECT, DIRECT_LATENT):
             if name == reference or reference not in by_arm:

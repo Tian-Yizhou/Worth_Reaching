@@ -8,7 +8,10 @@ are relabeled from the same trajectory or drawn from other trajectories.
 `Q(s, g, z, k, b, λ)` and `V(s, g, b, λ)` are fitted on frozen latent features with
 in-sample semi-Markov backups, as in implicit Q-learning. If the goal is first reached
 after `d` actions within the segment and the budget, the target is `1 − λd`. If the
-budget is spent first, it is `−λb`. Otherwise it is `−λk + V(s_{t+k}, g, b − k, λ)`. `V`
+budget is spent first, it is `−λb`. Otherwise it is `−λk + V(s_{t+k}, g, b − k, λ)`, with
+`V` clipped to the range any return can take, `[−λ(b − k), 1 − λ]`. The backups have no
+discount, so without the clip each backup adds the upper expectile's bias to the last
+and values grow with the number of backups a budget spans. `V`
 is an upper expectile of the target network's `Q` over the options the archive pursued
 from the same state, which avoids maximizing over candidates nobody tried. The time
 cost `λ` is an input sampled during training, so one value serves every setting.
@@ -19,7 +22,7 @@ planner uses as its switching margin and to rank candidates by a quantile.
 
 from collections.abc import Callable
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -47,7 +50,7 @@ class OptionValueConfig:
     depth: int = 3
     heads: int = 4
     learning_rate: float = 3e-4
-    expectile: float = 0.9
+    expectile: float = 0.7
     tau: float = 0.005
     time_costs: tuple[float, ...] = (0.0, 0.0005, 0.001, 0.002)
     """Per-action costs sampled during training; the planner picks one."""
@@ -152,6 +155,35 @@ def label_options(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class OptionAttempts:
+    """Options the executor actually pursued, as frozen latents and outcomes.
+
+    An option interrupted after `duration` actions is the option with that duration,
+    since the executor acts on the latent alone.
+    """
+
+    states: np.ndarray
+    goals: np.ndarray
+    targets: np.ndarray
+    landings: np.ndarray
+    durations: np.ndarray
+    budgets: np.ndarray
+    first: np.ndarray
+
+    def __len__(self) -> int:
+        return len(self.durations)
+
+    @classmethod
+    def concatenate(cls, parts: list["OptionAttempts"]) -> "OptionAttempts":
+        return cls(
+            *(
+                np.concatenate([getattr(part, name) for part in parts])
+                for name in cls.__slots__
+            )
+        )
+
+
 class OptionValue(nn.Module):
     def __init__(self, latent_size: int, max_budget: int, config: OptionValueConfig):
         super().__init__()
@@ -224,24 +256,47 @@ class OptionBatches:
     """Frozen encodings aligned with the archive rows."""
     config: OptionValueConfig
     seed: tuple[int, ...]
+    attempts: OptionAttempts | None = None
+    online_share: float = 0.0
+    """Share of each batch drawn from the executor's attempts."""
 
     def __call__(self, step: int):
         rng = np.random.default_rng([*self.seed, step])
         options, config = self.options, self.config
-        rows = rng.integers(len(options.starts), size=config.batch_size)
+        size = config.batch_size
+        online = round(size * self.online_share) if self.attempts else 0
+        rows = rng.integers(len(options.starts), size=size - online)
         start, duration = options.starts[rows], options.durations[rows]
-        budget, first = options.budgets[rows], options.first[rows]
+        columns = [
+            self.latents[start],
+            self.latents[options.goals[rows]],
+            self.latents[options.targets[rows]],
+            self.latents[start + duration],
+            duration,
+            options.budgets[rows],
+            options.first[rows],
+        ]
+        if online:
+            attempts = self.attempts
+            picked = rng.integers(len(attempts), size=online)
+            extra = [
+                attempts.states,
+                attempts.goals,
+                attempts.targets,
+                attempts.landings,
+                attempts.durations,
+                attempts.budgets,
+                attempts.first,
+            ]
+            columns = [
+                np.concatenate((column, values[picked]))
+                for column, values in zip(columns, extra, strict=True)
+            ]
         costs = np.asarray(config.time_costs, dtype=np.float32)
-        cost = costs[rng.integers(len(costs), size=len(rows))]
-        mask = rng.random((len(rows), config.heads)) < config.bootstrap
+        cost = costs[rng.integers(len(costs), size=size)]
+        mask = rng.random((size, config.heads)) < config.bootstrap
         return (
-            tensor(self.latents[start]),
-            tensor(self.latents[options.goals[rows]]),
-            tensor(self.latents[options.targets[rows]]),
-            tensor(self.latents[start + duration]),
-            tensor(duration),
-            tensor(budget),
-            tensor(first),
+            *(tensor(np.asarray(column)) for column in columns),
             tensor(cost),
             torch.as_tensor(mask),
         )
@@ -254,7 +309,10 @@ def option_value_loss(model: OptionValue, batch):
     arrived = first <= torch.minimum(duration, budget)
     expired = budget <= duration
     with torch.no_grad():
-        following = model.state(landing, goal, (budget - duration).clamp_min(0), cost)
+        left = (budget - duration).clamp_min(0)
+        following = model.state(landing, goal, left, cost)
+        # The goal is reached at least one action after landing, or the budget runs out.
+        following = torch.minimum(torch.maximum(following, -cost * left), 1 - cost)
         target = torch.where(
             arrived,
             1 - cost * first.clamp_max(model.max_budget),
@@ -271,6 +329,38 @@ def option_value_loss(model: OptionValue, batch):
     )
 
 
+@torch.no_grad()
+def value_range(
+    model: OptionValue,
+    options: HindsightOptions,
+    latents: np.ndarray,
+    cost: float,
+    *,
+    size: int = 8192,
+    seed: int = 0,
+) -> dict:
+    """Quantiles of Q on labeled options, which no return can push outside [-1, 1]."""
+    batch = OptionBatches(
+        options, latents, replace(model.config, batch_size=size), (seed, 960)
+    )(0)
+    state, goal, latent, _, duration, budget, *_ = batch
+    q = model.option(
+        state, goal, latent, duration, budget, torch.full((size,), cost)
+    ).mean(0)
+    goal_rows = (latent == goal).all(-1)
+    quantiles = (0.0, 0.01, 0.5, 0.99, 1.0)
+
+    def summary(values):
+        return np.quantile(values.numpy(), quantiles).round(4).tolist()
+
+    return {
+        "quantiles": list(quantiles),
+        "all": summary(q),
+        "goal_options": summary(q[goal_rows]),
+        "subgoal_options": summary(q[~goal_rows]),
+    }
+
+
 def fit_option_value(
     options: HindsightOptions,
     latents: np.ndarray,
@@ -279,14 +369,20 @@ def fit_option_value(
     *,
     seed: int,
     out: Path,
+    attempts: OptionAttempts | None = None,
+    online_share: float = 0.0,
+    model: OptionValue | None = None,
+    updates: int | None = None,
 ) -> OptionValue:
+    """Fit from hindsight options, or continue `model` with the executor's attempts."""
     torch.manual_seed(seed)
-    model = OptionValue(latents.shape[-1], max_budget, config)
+    if model is None:
+        model = OptionValue(latents.shape[-1], max_budget, config)
     return train_stage(
-        model,
-        OptionBatches(options, latents, config, (seed, 950)),
+        model.train(),
+        OptionBatches(options, latents, config, (seed, 950), attempts, online_share),
         option_value_loss,
-        steps=config.updates,
+        steps=config.updates if updates is None else updates,
         learning_rate=config.learning_rate,
         out=out,
         checkpoint_every=10_000,
