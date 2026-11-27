@@ -226,7 +226,9 @@ def test_scene_executor_cli_trains_and_scores_official_tasks(tmp_path):
     assert {"direct", "direct_latent", "online/fast@0.001"} <= set(summary["arms"])
     assert "oracle" not in summary["arms"]
     (round_,) = summary["rounds"]
-    assert round_["episodes"] == 2 and "value_range" in round_
+    # Two training resets, each played by the planner and by uninterrupted goal pursuit.
+    assert round_["episodes"] == 4 and "value_range" in round_
+    assert round_["goal_pursuit_success"] is not None
     manifest = json.loads((options / "manifest.json").read_text())
     assert manifest["training_resets"]["seeds"] == [63001, 63003]
     assert (options / "executor-attempts.npz").exists() or round_["attempts"] == 0
@@ -243,6 +245,7 @@ def test_scene_executor_cli_trains_and_scores_official_tasks(tmp_path):
             "--out",
             again,
             *option_flags,
+            "--no-goal-attempts",
         ],
         check=True,
         capture_output=True,

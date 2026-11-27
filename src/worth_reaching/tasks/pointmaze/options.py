@@ -118,6 +118,9 @@ class MazeOptionConfig(OptionRunConfig):
         }
 
 
+TRAINED_PARTS = ("executor", "value")
+
+
 def reached(states: np.ndarray, goals: np.ndarray) -> np.ndarray:
     """PointMaze's sparse success predicate on public positions."""
     return np.linalg.norm(states[..., :2] - goals[..., :2], axis=-1) <= GOAL_RADIUS
@@ -177,7 +180,9 @@ def _load(trained: Path, frozen: FrozenRun, limit: int, config: MazeOptionConfig
     manifest = json.loads((trained / "manifest.json").read_text())
     if manifest.get("schema") != SCHEMA:
         raise ValueError(f"Expected a pointmaze-options run in {trained}")
-    if manifest["recipe"] != config.recipe:
+    # Evaluation depends on the executor and value only, not on how they were
+    # collected; the manifest keeps the earlier run's full recipe.
+    if any(manifest["recipe"][part] != config.recipe[part] for part in TRAINED_PARTS):
         raise ValueError(f"The executor or value recipe differs from {trained}")
     if manifest["source_weights_sha256"] != frozen.weights_sha256:
         raise ValueError(f"{trained} was trained on a different world model")
@@ -317,13 +322,13 @@ def _correct(
 ):
     """Collect the executor's attempts on training resets and correct the value."""
     episodes = config.online.episodes
-    arm_configs = {"collect": (ONLINE, replace(config.collection, surprise=surprise))}
+    arm_configs = config.collection_arms(surprise)
 
     def collect(value, index):
         seeds = range(
             TRAIN_SEED_BASE + index * episodes, TRAIN_SEED_BASE + (index + 1) * episodes
         )
-        planned = [("collect", seed) for seed in seeds]
+        planned = [(arm, seed) for seed in seeds for arm in arm_configs]
         shards = [planned[i::workers] for i in range(workers)]
         with _pool(
             len(shards),
@@ -434,6 +439,8 @@ def run(
         weights_path = trained / WEIGHTS_FILE
         labeled = json.loads((trained / "manifest.json").read_text())["labels"]
     recipe = config.recipe
+    if trained is not None:
+        recipe = json.loads((trained / "manifest.json").read_text())["recipe"]
     config = replace(config, planner=replace(config.planner, surprise=surprise))
     arm_configs = arms(config)
     seeds = list(range(SEED_BASE[split], SEED_BASE[split] + repeats))

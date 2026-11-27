@@ -115,7 +115,9 @@ def _load(trained: Path, regions_sha: str, latent_size: int, config: SceneOption
     manifest = json.loads((trained / "manifest.json").read_text())
     if manifest.get("schema") != SCHEMA:
         raise ValueError(f"Expected a scene-options run in {trained}")
-    if manifest["recipe"] != config.recipe:
+    # Evaluation depends on the value only, not on how its attempts were collected;
+    # the manifest keeps the earlier run's full recipe.
+    if manifest["recipe"]["value"] != config.recipe["value"]:
         raise ValueError(f"The value recipe differs from {trained}")
     if manifest["regions_weights_sha256"] != regions_sha:
         raise ValueError(f"{trained} was trained on a different scene-regions run")
@@ -126,7 +128,7 @@ def _load(trained: Path, regions_sha: str, latent_size: int, config: SceneOption
         )
         for name in (OFFLINE, ONLINE)
     }
-    return restored, manifest["rounds"], manifest["labels"]
+    return restored, manifest["rounds"], manifest["labels"], manifest["recipe"]
 
 
 _WORKER: dict = {}
@@ -266,18 +268,17 @@ def run(
             seed=model.seed,
             out=out / "checkpoints" / "value",
         )
-        collection = {
-            "collect": (ONLINE, replace(config.collection, surprise=surprise))
-        }
+        collection = config.collection_arms(surprise)
         episodes = config.online.episodes
         train_base = SCENE.seed_base + TRAIN_SEED_OFFSET
 
         def collect(value, index):
             planned = [
-                ("collect", tasks[episode % len(tasks)], train_base + seed)
+                (arm, tasks[episode % len(tasks)], train_base + seed)
                 for episode, seed in enumerate(
                     range(index * episodes, (index + 1) * episodes)
                 )
+                for arm in collection
             ]
             shards = _shards(planned, workers)
             with _pool(
@@ -319,9 +320,12 @@ def run(
             ),
         }
     else:
-        values, rounds, labels = _load(trained, regions_sha, model.latent_size, config)
+        values, rounds, labels, recipe = _load(
+            trained, regions_sha, model.latent_size, config
+        )
         weights_path = trained / OPTION_WEIGHTS
-    recipe = config.recipe
+    if trained is None:
+        recipe = config.recipe
     config = replace(config, planner=replace(config.planner, surprise=surprise))
     arm_configs = arms(config)
     start_seed = SCENE.seed_base + SEED_OFFSETS[split]

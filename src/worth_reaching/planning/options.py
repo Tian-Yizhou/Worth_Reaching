@@ -49,9 +49,10 @@ class PlannerConfig:
     samples candidates. Shorter budgets give faster routes; the value still scores every
     candidate with the true remaining budget."""
     explore: float = 0.0
-    """Probability of pursuing a random candidate at a decision, for collecting the
-    executor's attempts. The draw is uniform over candidate sources (each proposal
-    budget and the terminal goal), then uniform within the source."""
+    """Probability of pursuing a random sampled candidate at a decision, for collecting
+    the executor's attempts. The draw is uniform over proposal budgets, then uniform
+    within the budget. The terminal goal is left out: collection tries it on every
+    training reset in an episode of its own."""
 
     def __post_init__(self) -> None:
         if (
@@ -100,6 +101,9 @@ class PlannerLog:
     pursued: list[tuple[int, np.ndarray]] = field(default_factory=list)
     """Each option the executor started pursuing, as (step, latent)."""
     decisions: list[dict] = field(default_factory=list)
+    """Each new decision: its trigger, the chosen option and the values it compared."""
+    switch_log: list[dict] = field(default_factory=list)
+    """Each switch among cached candidates, with the values before and after."""
 
 
 class OptionPlanner:
@@ -135,7 +139,7 @@ class OptionPlanner:
         trigger = self._trigger(state, target, remaining)
         if trigger is not None:
             self.log.triggers[trigger] = self.log.triggers.get(trigger, 0) + 1
-            self._decide(observation, goal, state, target, remaining)
+            self._decide(observation, goal, state, target, remaining, trigger)
         action = np.asarray(
             self.act_latent(observation, self.current.option.latent), dtype=np.float32
         )
@@ -176,6 +180,17 @@ class OptionPlanner:
         ):
             chosen = options[best]
             chosen.duration, chosen.start = self._left(chosen, remaining), self.step
+            self.log.switch_log.append(
+                {
+                    "step": self.step,
+                    "remaining": remaining,
+                    "duration": chosen.duration,
+                    "goal": chosen.goal,
+                    "source": chosen.source,
+                    "value": float(utility[best]),
+                    "previous_value": float(utility[0]),
+                }
+            )
             self.current = Selected(chosen, float(utility[best]), float(spread[best]))
             self.log.switches += 1
             self.log.pursued.append((self.step, chosen.latent))
@@ -193,7 +208,7 @@ class OptionPlanner:
             self.config.time_cost,
         )
 
-    def _decide(self, observation, goal, state, target, remaining):
+    def _decide(self, observation, goal, state, target, remaining, trigger):
         config, options = self.config, []
         if config.subgoals:
             options = self._propose(goal, remaining)
@@ -203,10 +218,11 @@ class OptionPlanner:
         heads = self._score(state, target, options, remaining)
         utility = heads.mean(axis=0) + config.risk * heads.std(axis=0)
         best = int(np.argmax(utility))
-        if config.explore:
+        greedy = best
+        sources = sorted({option.source for option in options} - {-1})
+        if config.explore and sources:
             rng = np.random.default_rng(stream_seed(self.key, self.step, 2))
             if rng.random() < config.explore:
-                sources = sorted({option.source for option in options})
                 source = sources[int(rng.integers(len(sources)))]
                 members = [
                     i for i, option in enumerate(options) if option.source == source
@@ -218,14 +234,21 @@ class OptionPlanner:
         )
         self.cache = options
         self.log.pursued.append((self.step, chosen.latent))
+        sampled = [i for i, option in enumerate(options) if not option.goal]
         self.log.decisions.append(
             {
                 "step": self.step,
+                "trigger": trigger,
                 "remaining": remaining,
                 "duration": chosen.duration,
                 "goal": chosen.goal,
+                "source": chosen.source,
+                "explored": best != greedy,
                 "value": float(utility[best]),
                 "goal_value": float(utility[-1]) if config.goal_candidate else None,
+                "best_sampled_value": float(utility[sampled].max())
+                if sampled
+                else None,
             }
         )
 

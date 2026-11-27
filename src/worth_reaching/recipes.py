@@ -87,6 +87,12 @@ def add_option_arguments(parser: argparse.ArgumentParser) -> None:
         help="Probability of pursuing a random candidate at a decision while collecting",
     )
     parser.add_argument(
+        "--goal-attempts",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Also pursue the terminal goal uninterrupted on every training reset",
+    )
+    parser.add_argument(
         "--fast-budgets",
         type=float,
         nargs="+",

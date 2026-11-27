@@ -342,7 +342,7 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
         } <= set(options_summary["arms"])
         assert planner["generations_per_episode"] >= 1
         (collected,) = options_summary["rounds"]
-        assert collected["episodes"] == 2 and collected["attempts"] >= 2
+        assert collected["episodes"] == 4 and collected["attempts"] >= 2
         assert (options_out / "executor-attempts.npz").is_file()
         assert options_summary["arms"]["direct_latent"]["goal_choice_share"] == 1
         reused = tmp_path / "options-reused"

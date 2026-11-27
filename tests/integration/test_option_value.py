@@ -158,11 +158,37 @@ def test_planner_switches_to_a_cached_candidate_and_falls_back_to_the_goal():
     planner.cache.append(better)
     planner(np.zeros(2, np.float32), goal)
     assert planner.current.option is better and planner.log.switches == 1
+    (switch,) = planner.log.switch_log
+    assert switch["value"] == pytest.approx(2.0)
+    assert switch["previous_value"] == pytest.approx(0.5)
     np.testing.assert_array_equal(acted[-1], better.latent)
     for _ in range(10):
         planner(np.zeros(2, np.float32), goal)
     # The switched option's duration ran out, so the planner decided again.
     assert planner.log.triggers.get("duration") == 1
+    assert [d["trigger"] for d in planner.log.decisions] == ["start", "duration"]
+
+    # Exploration draws among sampled candidates and never the terminal goal, even
+    # when the goal has the highest value.
+    explorer = OptionPlanner(
+        Completion(),
+        Value(),
+        lambda observation, latent: np.zeros(2),
+        key=0,
+        limit=50,
+        config=PlannerConfig(explore=1.0, interrupt=False),
+        action_size=2,
+    )
+    sampled = [
+        Option(np.array([0.1 * i, 0.0], np.float32), 5, 0, source=i % 2)
+        for i in range(4)
+    ]
+    explorer._propose = lambda goal, remaining: list(sampled)
+    for _ in range(20):
+        explorer(np.zeros(2, np.float32), np.array([3.0, 0.0], np.float32))
+    assert explorer.log.decisions and not any(d["goal"] for d in explorer.log.decisions)
+    assert all(d["explored"] for d in explorer.log.decisions)
+    assert all(d["goal_value"] == pytest.approx(3.0) for d in explorer.log.decisions)
 
 
 def test_attempts_split_an_episode_at_each_pursued_option_and_stop_at_success():

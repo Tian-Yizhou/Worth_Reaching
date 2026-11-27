@@ -28,6 +28,7 @@ from worth_reaching.planning.options import OptionPlanner, PlannerConfig
 
 DIRECT, ORACLE, DIRECT_LATENT = "direct", "oracle", "direct_latent"
 OFFLINE, ONLINE = "offline", "online"
+COLLECT, COLLECT_GOAL = "collect", "collect_goal"
 ATTEMPTS_FILE = "executor-attempts.npz"
 
 
@@ -37,7 +38,11 @@ class OnlineConfig:
     episodes: int = 256
     """Training resets per round."""
     explore: float = 0.2
-    """Probability of pursuing a uniformly drawn candidate at a decision."""
+    """Probability of pursuing a uniformly drawn sampled candidate at a decision."""
+    goal_attempts: bool = True
+    """Also play every training reset pursuing the encoded terminal goal for the whole
+    budget without interruption, so the value learns the goal option's own outcome
+    rather than a bootstrap after an early switch."""
     updates: int = 50_000
     """Value updates per round, continuing from the previous value."""
     online_share: float = 0.5
@@ -97,6 +102,24 @@ class OptionRunConfig:
             proposal_budgets=self.fast_budgets,
             explore=self.online.explore,
         )
+
+    def collection_arms(self, surprise: float) -> dict[str, "Arm"]:
+        """The planner that collects attempts and, if enabled, uninterrupted goal
+        pursuit on the same training resets."""
+        result: dict[str, Arm] = {
+            COLLECT: (ONLINE, replace(self.collection, surprise=surprise))
+        }
+        if self.online.goal_attempts:
+            result[COLLECT_GOAL] = (
+                ONLINE,
+                replace(
+                    self.planner,
+                    time_cost=self.eval_costs[-1],
+                    subgoals=False,
+                    interrupt=False,
+                ),
+            )
+        return result
 
 
 Arm = tuple[str, PlannerConfig | str]
@@ -181,12 +204,20 @@ def correct(
 
 
 def _round(index: int, rows: list[dict], attempts: OptionAttempts) -> dict:
+    """Collection statistics; success and choices are those of the planner episodes."""
+    goal_rows = [row for row in rows if row["arm"] == COLLECT_GOAL]
+    environment_steps = sum(row["steps"] for row in rows)
+    episodes = len(rows)
+    rows = [row for row in rows if row["arm"] != COLLECT_GOAL]
     successes = [row["first_success_step"] for row in rows if row["success"]]
     decisions = sum(row["decisions"] for row in rows)
     return {
         "round": index,
-        "episodes": len(rows),
-        "environment_steps": sum(row["steps"] for row in rows),
+        "episodes": episodes,
+        "environment_steps": environment_steps,
+        "goal_pursuit_success": float(np.mean([row["success"] for row in goal_rows]))
+        if goal_rows
+        else None,
         "success": float(np.mean([row["success"] for row in rows])),
         "mean_first_success_step": float(np.mean(successes)) if successes else None,
         "goal_choice_share": sum(row["goal_choices"] for row in rows) / decisions
@@ -210,6 +241,7 @@ def settings(args: argparse.Namespace) -> dict:
             rounds=args.online_rounds,
             episodes=args.online_episodes,
             explore=args.explore,
+            goal_attempts=args.goal_attempts,
             updates=args.online_updates,
         ),
         "planner": PlannerConfig(
@@ -251,6 +283,8 @@ def record(arm: str, seed: int, task, policy, success: bool, steps: int, first):
             if (gaps := [d for d in before if d["goal_value"] is not None])
             else None,
             "first_decision": decisions[0] if decisions else None,
+            "decision_log": decisions,
+            "switch_log": policy.log.switch_log,
         }
     return row
 
