@@ -7,10 +7,9 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.optional-dependencies]
-grid = ["flax>=0.12,<1"]
-ogbench = ["ogbench==1.1.5", "mujoco==3.3.7", "flax>=0.12,<1"]
+ogbench = ["ogbench==1.1.5", "mujoco==3.3.7"]
 scene-warp = ["mujoco-mjx[warp]==3.3.7; sys_platform == 'linux' and platform_machine == 'x86_64'"]
-pointmaze = ["gymnasium-robotics==1.4.2", "minari[hdf5,hf]==0.5.4", "mujoco==3.3.7", "flax>=0.12,<1"]
+pointmaze = ["gymnasium-robotics==1.4.2", "minari[hdf5,hf]==0.5.4", "mujoco==3.3.7"]
 training = ["lightning>=2.6,<3", "torch>=2.12,<3", "torchdata>=0.11,<1"]
 training-cpu = ["lightning>=2.6,<3", "torch>=2.12,<3", "torchdata>=0.11,<1"]
 

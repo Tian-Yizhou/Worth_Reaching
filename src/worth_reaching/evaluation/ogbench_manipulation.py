@@ -14,7 +14,6 @@ from time import perf_counter
 
 import numpy as np
 import torch
-from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.data.ogbench import StateArchive, load_state_archive
@@ -25,10 +24,13 @@ from worth_reaching.models.continuous_completion import (
     fit,
 )
 from worth_reaching.models.training import (
+    WEIGHTS_FILE,
     PredictorStopping,
     describe,
+    load_weights,
     regression,
     restore_weights,
+    save_weights,
     stage_resume,
     stream_seed,
     train_stage,
@@ -143,14 +145,12 @@ def _evaluate_shard(
     limit: int,
 ):
     torch.set_num_threads(1)
-    actor, model = _restore_models(
-        weights_path.read_bytes(), benchmark, config, executor
-    )
+    actor, model = _restore_models(weights_path, benchmark, config, executor)
     return list(_rollout_cases(benchmark, cases, actor, model, limit))
 
 
-def _restore_models(packed, benchmark, config, executor):
-    values = serialization.msgpack_restore(packed)
+def _restore_models(weights_path: Path, benchmark, config, executor):
+    values = load_weights(weights_path)
     model = LearnedCompletion.from_weights(config, values)
     actor_model = gcbc.GCBC(
         executor.width, benchmark.observation_size, ACTION_SIZE, relative_coordinates=0
@@ -350,17 +350,16 @@ def run(
         errors = actor(batch.observations, batch.goals) - batch.actions
         metrics[f"executor_{label}_action_mse"] = float(np.square(errors).mean())
     write_json(out / "validation.json", metrics)
-    weights_path = out / "weights.msgpack"
-    weights_path.write_bytes(
-        serialization.to_bytes(
-            {
-                **model.weights,
-                "executor": actor_weights,
-                "mean": mean,
-                "scale": scale,
-                "flow_scale": model.flow_scale.numpy(),
-            }
-        )
+    weights_path = out / WEIGHTS_FILE
+    save_weights(
+        weights_path,
+        {
+            **model.weights,
+            "executor": actor_weights,
+            "mean": mean,
+            "scale": scale,
+            "flow_scale": model.flow_scale.numpy(),
+        },
     )
 
     if worker_count == 1:
@@ -464,10 +463,10 @@ def evaluate_frozen_scene(
     seeds = list(range(start_seed, start_seed + repeats))
     cases = list(product(tasks, seeds))
     workers = min(eval_workers, len(cases))
-    weights_path = checkpoint / "weights.msgpack"
-    packed = weights_path.read_bytes()
+    weights_path = checkpoint / WEIGHTS_FILE
     torch.set_num_threads(1)
-    actor, model = _restore_models(packed, SCENE, config, executor)
+    actor, model = _restore_models(weights_path, SCENE, config, executor)
+    packed = weights_path.read_bytes()
     dependencies = ["ogbench", "mujoco", "torch"]
     if backend == "warp":
         try:

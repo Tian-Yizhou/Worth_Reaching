@@ -50,4 +50,4 @@ def register_commands(commands) -> None:
         "predictor-patience",
     ):
         command.add_argument(f"--{name}", type=int)
-    command.set_defaults(run=_run, extra="grid")
+    command.set_defaults(run=_run, extra="training")

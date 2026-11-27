@@ -9,7 +9,6 @@ from pathlib import Path
 from random import Random
 
 import numpy as np
-from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.data.completion import CompletionExample
@@ -26,7 +25,13 @@ from worth_reaching.models.completion import (
     predict,
 )
 from worth_reaching.models.latent_energy import prefix_energy
-from worth_reaching.models.training import describe, stream_seed, weights
+from worth_reaching.models.training import (
+    WEIGHTS_FILE,
+    describe,
+    save_weights,
+    stream_seed,
+    weights,
+)
 from worth_reaching.tasks.dependency_grid import dataset, experiment, outcome_scoring
 from worth_reaching.tasks.dependency_grid import environment as grid
 
@@ -453,17 +458,16 @@ def run(
         updates=flow_updates,
         out=out / "checkpoints" / "flow",
     )
-    weights_path = out / "weights.msgpack"
-    weights_path.write_bytes(
-        serialization.to_bytes(
-            {
-                "codec": weights(codec),
-                "conditioned": weights(predictor),
-                "goal_blind": weights(goal_blind),
-                "flow": weights(fitted_flow),
-                "scale": scale.numpy(),
-            }
-        )
+    weights_path = out / WEIGHTS_FILE
+    save_weights(
+        weights_path,
+        {
+            "codec": weights(codec),
+            "conditioned": weights(predictor),
+            "goal_blind": weights(goal_blind),
+            "flow": weights(fitted_flow),
+            "scale": scale.numpy(),
+        },
     )
 
     def declare(case_layouts):
@@ -539,7 +543,7 @@ def run(
             "code_revision": code_revision(),
             "compute": describe(),
             "versions": {
-                name: version(name) for name in ("torch", "lightning", "numpy", "flax")
+                name: version(name) for name in ("torch", "lightning", "numpy")
             },
             "model": asdict(SPEC),
             "observation_schema": "dependency_grid_public_xy_key_locations_depth_inventory_v1",

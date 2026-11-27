@@ -7,7 +7,6 @@ from importlib.metadata import version
 from pathlib import Path
 
 import numpy as np
-from flax import serialization
 
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.data.trajectory_windows import MaskedBatch
@@ -16,7 +15,13 @@ from worth_reaching.models.continuous_completion import (
     LearnedCompletion,
     fit,
 )
-from worth_reaching.models.training import describe, stream_seed, validate_resume
+from worth_reaching.models.training import (
+    WEIGHTS_FILE,
+    describe,
+    save_weights,
+    stream_seed,
+    validate_resume,
+)
 from worth_reaching.planning.receding_goals import Policy, RecedingGoals
 from worth_reaching.tasks.pointmaze.dataset import (
     ACTION_SIZE,
@@ -311,15 +316,14 @@ def run(
         )
         metrics = model.validate(validation_windows)
         write_json(out / "validation.json", metrics)
-        (out / "weights.msgpack").write_bytes(
-            serialization.to_bytes(
-                {
-                    **model.weights,
-                    "mean": mean,
-                    "scale": scale,
-                    "flow_scale": model.flow_scale.numpy(),
-                }
-            )
+        save_weights(
+            out / WEIGHTS_FILE,
+            {
+                **model.weights,
+                "mean": mean,
+                "scale": scale,
+                "flow_scale": model.flow_scale.numpy(),
+            },
         )
 
         by_budget, resets = {}, {}
@@ -327,7 +331,7 @@ def run(
             arm = out / f"budget-{limit}" if multiple else out
             if multiple:
                 arm.mkdir()
-                (arm / "weights.msgpack").hardlink_to(out / "weights.msgpack")
+                (arm / WEIGHTS_FILE).hardlink_to(out / WEIGHTS_FILE)
                 write_json(
                     arm / "manifest.json",
                     {**manifest, "evaluation": {**evaluation, "action_limit": limit}},

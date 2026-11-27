@@ -28,7 +28,8 @@ The `src/worth_reaching/` package groups code by responsibility.
 | `tasks/pointmaze/` | Own the Maze2D task specifications, dataset and simulator adapters, controller, experiment commands and paired probes |
 | `tasks/dependency_grid/` | Define switchable goals with ordered prerequisites, collect public trajectories, and evaluate declared or learned targets through paired execution |
 | `tasks/budget_routes/` | Sample latent goals, compose executable prefixes and assess rare routes under a shared learned transition scorer |
-| `planning/` | Execute decoded goals from public observation and action histories through a supplied controller |
+| `planning/goals.py` | Share stage semantics for every task: pursue declared goals in order until arrival, deadline or termination, abandon the rest after a miss, and record how each stage ended. The task supplies the target its executor consumes and the arrival rule |
+| `planning/receding_goals.py` | Replan decoded goals from public observation and action histories for the continuous tasks |
 
 Group tasks that share simulator behavior in one family. For example, Scene uses the OGBench reset and step implementation in `tasks/ogbench_manipulation/environment.py`, and its preset selects the observation schema, goals and action limit. A new family can follow the PointMaze or dependency-grid layout and register its commands from a lightweight `cli.py`, so listing commands works without installing simulator extras.
 

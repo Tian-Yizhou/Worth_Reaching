@@ -8,7 +8,7 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from worth_reaching.models.codec import legacy_dense, mlp
+from worth_reaching.models.codec import mlp
 from worth_reaching.models.training import (
     RandomBatches,
     regression,
@@ -89,8 +89,6 @@ def route_conditions(inputs, forecast: Tensor, goals: int) -> Tensor:
 
 
 def load_parameters(size: int, values: dict) -> RouteFlow:
-    if "params" in values:
-        values = legacy_dense(values["params"], "net", "Dense_0", "Dense_1", "Dense_2")
     conditions = values["net.0.weight"].shape[1] - size - 1
     model = RouteFlow(size, conditions)
     restore_weights(model, values)

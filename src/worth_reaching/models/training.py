@@ -75,6 +75,33 @@ def weights(model: nn.Module) -> dict[str, np.ndarray]:
     }
 
 
+WEIGHTS_FILE = "weights.pt"
+
+
+def save_weights(path: Path, values: dict) -> None:
+    """Write a nested dictionary of arrays as PyTorch tensors."""
+
+    def pack(value):
+        if isinstance(value, dict):
+            return {name: pack(item) for name, item in value.items()}
+        return torch.tensor(np.asarray(value))
+
+    torch.save(pack(values), path)
+
+
+def load_weights(path: Path) -> dict:
+    """Read arrays written by save_weights without unpickling arbitrary objects."""
+    if not path.is_file():
+        raise ValueError(f"Expected saved weights at {path}")
+
+    def unpack(value):
+        if isinstance(value, dict):
+            return {name: unpack(item) for name, item in value.items()}
+        return value.numpy()
+
+    return unpack(torch.load(path, map_location="cpu", weights_only=True))
+
+
 def restore_weights(model: nn.Module, values: dict) -> nn.Module:
     model.load_state_dict({name: torch.tensor(value) for name, value in values.items()})
     return model.eval()

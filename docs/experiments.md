@@ -9,13 +9,13 @@ Each row lists the experiment extra to pass to `uv sync --locked`. For model tra
 | Workflow | Experiment extra | Inputs and next step |
 | --- | --- | --- |
 | [Dependency grid](#compare-ordered-targets-in-the-dependency-grid) | Base install | Run matched target attempts at two depths with no dataset or checkpoint. |
-| [Dependency-grid latent goals](#test-frozen-latent-goals-in-the-dependency-grid) | `grid` | Collect public trajectories, train a completion model, and compare frozen selection and replay. |
-| [Budgeted routes](#compose-latent-goals-under-action-budgets) | `grid` | Compose latent goals and compare routes across action budgets. |
-| [Selector comparison](#compare-selectors-on-matched-attempts) | `grid` | Fit and compare selectors on exported `shared_attempts_v1` banks. |
+| [Dependency-grid latent goals](#test-frozen-latent-goals-in-the-dependency-grid) | Training only | Collect public trajectories, train a completion model, and compare frozen selection and replay. |
+| [Budgeted routes](#compose-latent-goals-under-action-budgets) | Training only | Compose latent goals and compare routes across action budgets. |
+| [Selector comparison](#compare-selectors-on-matched-attempts) | Training only | Fit and compare selectors on exported `shared_attempts_v1` banks. |
 | [PointMaze](#run-the-diffuser-maze2d-pilots) | `pointmaze` | Download the corresponding Minari dataset. Train with `pointmaze-latent`, then reuse frozen Medium runs for the [energy comparison](#test-latent-energy-against-terminal-success). |
 | [OGBench Scene](#run-state-based-ogbench-scene) | `ogbench` | Download the Scene play archive and run `scene-latent`. Add `scene-warp` for batched CUDA evaluation. |
 
-The grid and routes runners use Flax only to serialize weights. They also need a training extra.
+Runs save model weights as PyTorch tensors in `weights.pt`.
 
 ## Compare ordered targets in the dependency grid
 
@@ -40,7 +40,7 @@ Development uses 16 layouts and 16 repeats by default. To shorten a smoke check,
 Install the training and serialization extras. The command generates its own trajectories and writes them alongside the paired attempts.
 
 ```bash
-uv sync --locked --extra training-cpu --extra grid
+uv sync --locked --extra training-cpu
 mkdir -p results
 run_dir="$(mktemp -d results/dependency-grid-latent.XXXXXX)"
 uv run --no-sync wr dependency-grid-latent --seed 7 --out "$run_dir/seed-7"
@@ -74,7 +74,7 @@ For a short smoke run, add `--selector-repeats 2` to the smoke settings above. T
 
 ## Compose latent goals under action budgets
 
-Install `training-cpu` and `grid` as for the dependency-grid latent workflow. Run the controlled task with two-, three-, and four-action budgets.
+Install `training-cpu` as for the dependency-grid latent workflow. Run the controlled task with two-, three-, and four-action budgets.
 
 ```bash
 mkdir -p results
@@ -97,7 +97,7 @@ The replan arm starts with the selected composition. On reaching its first targe
 From the repository root, install the CPU dependencies used by CI and run the repository checks.
 
 ```bash
-uv sync --locked --group dev --extra training-cpu --extra grid --extra ogbench --extra pointmaze
+uv sync --locked --group dev --extra training-cpu --extra ogbench --extra pointmaze
 uv run --no-sync ruff check .
 uv run --no-sync ruff format --check src tests
 CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu uv run --no-sync pytest
@@ -127,7 +127,7 @@ Use a new output directory for each run. Keep long collection and training runs 
 Install `training` for the locked PyTorch CUDA build on Linux, or `training-cpu` for CPU development and CI. Use `uv run --no-sync` after installation to reuse the selected extras. [PyTorch installation](https://pytorch.org/get-started/locally/)
 
 ```bash
-uv sync --locked --group dev --extra training --extra grid --extra ogbench --extra pointmaze
+uv sync --locked --group dev --extra training --extra ogbench --extra pointmaze
 uv run --no-sync wr devices
 ```
 
@@ -179,7 +179,7 @@ new_run="$(mktemp -d results/pointmaze-resume.XXXXXX)/umaze"
 uv run --no-sync wr pointmaze-latent --task umaze --resume "$old_run" --out "$new_run"
 ```
 
-Add any non-default flags from the original run to the resume command. Published Flax-format weights remain readable for frozen inference. Resumption with optimizer state uses a Lightning checkpoint from the same training recipe. [Lightning checkpoint format](https://lightning.ai/docs/pytorch/stable/reference/common/checkpointing_basic)
+Add any non-default flags from the original run to the resume command. Frozen runs read `weights.pt`. Runs saved before this format used Flax `weights.msgpack` and need a one-time conversion. Resumption with optimizer state uses a Lightning checkpoint from the same training recipe. [Lightning checkpoint format](https://lightning.ai/docs/pytorch/stable/reference/common/checkpointing_basic)
 
 ## Compare selectors on matched attempts
 

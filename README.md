@@ -59,7 +59,7 @@ The Python package lives under `src/worth_reaching/`. Task adapters supply obser
 | [`tasks/`](src/worth_reaching/tasks) | Own simulator adapters, task definitions, dataset loaders, and task-specific experiment code and scripts. |
 | [`models/`](src/worth_reaching/models) | Encode observations, predict masked latent states, sample trajectories, and train or restore weights. |
 | [`data/`](src/worth_reaching/data) | Define shared trajectory and window formats, read OGBench state archives, and record experiment artifacts. |
-| [`planning/`](src/worth_reaching/planning) | Execute intermediate targets with a supplied controller and replan from new observations. |
+| [`planning/`](src/worth_reaching/planning) | Pursue declared goals in order under a shared arrival and deadline rule, and replan from new observations. |
 | [`evaluation/`](src/worth_reaching/evaluation) | Replay trajectories, compare matched attempts, and score waypoint arrival and final success. |
 | [`cli.py`](src/worth_reaching/cli.py), [`recipes.py`](src/worth_reaching/recipes.py), [`compute.py`](src/worth_reaching/compute.py) | Dispatch `wr` commands, resolve model settings, and select compute devices. |
 | [`configs/`](configs) | Store TOML task, model, and compute settings. |

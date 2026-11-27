@@ -4,8 +4,6 @@ from functools import lru_cache
 from itertools import permutations
 from pathlib import Path
 
-from flax import serialization
-
 from worth_reaching.models import flow
 from worth_reaching.models.completion import (
     FrozenCompletion,
@@ -16,7 +14,12 @@ from worth_reaching.models.completion import (
     pack_windows,
 )
 from worth_reaching.models.latent_energy import prefix_energy
-from worth_reaching.models.training import stream_seed, weights
+from worth_reaching.models.training import (
+    WEIGHTS_FILE,
+    save_weights,
+    stream_seed,
+    weights,
+)
 from worth_reaching.tasks.budget_routes import data
 from worth_reaching.tasks.budget_routes import environment as env
 
@@ -45,15 +48,14 @@ def fit_proposer(
         updates=flow_updates,
         out=out / "checkpoints" / "flow",
     )
-    (out / "weights.msgpack").write_bytes(
-        serialization.to_bytes(
-            {
-                "codec": weights(codec),
-                "conditioned": weights(predictor),
-                "flow": weights(fitted_flow),
-                "scale": scale.numpy(),
-            }
-        )
+    save_weights(
+        out / WEIGHTS_FILE,
+        {
+            "codec": weights(codec),
+            "conditioned": weights(predictor),
+            "flow": weights(fitted_flow),
+            "scale": scale.numpy(),
+        },
     )
     return model, fitted_flow, scale
 

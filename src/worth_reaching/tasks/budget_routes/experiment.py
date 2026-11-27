@@ -10,6 +10,8 @@ import numpy as np
 
 from worth_reaching.data.artifacts import code_revision, write_json
 from worth_reaching.models.completion import TrainingConfig
+from worth_reaching.models.training import WEIGHTS_FILE
+from worth_reaching.planning.goals import GoalSequence, Stage
 from worth_reaching.tasks.budget_routes import data, planner
 from worth_reaching.tasks.budget_routes import environment as env
 
@@ -124,38 +126,45 @@ def _declare(fitted, value, world, budget, train, count, seed) -> dict:
 
 def rollout(world, budget, route, draws, *, value=None, suffixes=()) -> dict:
     state = world.start
-    pending = route
-    reached, actions = [], []
+    goals = GoalSequence(
+        [Stage(node) for node in route], lambda current, node: current.node == node
+    )
+    actions = []
     switches = suffix_queries = 0
     for index, draw in enumerate(draws):
-        action, pending = env.next_action(state, pending)
+        before = len(goals.arrivals)
+        stage = goals.advance(state, index)
+        remaining = budget - index
+        if value is not None and before == 0 and len(goals.arrivals) == 1 and remaining:
+            pending = tuple(stage.target for stage in goals.stages[goals.stage :])
+            available = [
+                route
+                for route in suffixes
+                if env.track(state.node, route[0]) is not None
+            ]
+            new, _ = planner.rank(
+                value,
+                world.profile,
+                state,
+                remaining,
+                [*available, *([pending] if pending else [])],
+            )
+            suffix_queries += len(available) + bool(pending) + 1
+            switches += new != pending
+            goals.replace_remaining([Stage(node) for node in new])
+            stage = goals.active
+        action = None if stage is None else env.track(state.node, stage.target)
+        if action is None:
+            goals.abandon(index)
+            action = env.track(state.node, env.GOAL)
         state = env.step(world, state, action, draw)
         actions.append(action)
         if state.node in (env.GOAL, env.FAILED):
             break
-        if pending and state.node == pending[0]:
-            reached.append(pending[0])
-            pending = pending[1:]
-            remaining = budget - index - 1
-            if value is not None and len(reached) == 1 and remaining:
-                available = [
-                    route
-                    for route in suffixes
-                    if env.track(state.node, route[0]) is not None
-                ]
-                new, _ = planner.rank(
-                    value,
-                    world.profile,
-                    state,
-                    remaining,
-                    [*available, *([pending] if pending else [])],
-                )
-                suffix_queries += len(available) + bool(pending) + 1
-                switches += new != pending
-                pending = new
+    goals.finish(state, len(actions))
     return {
         "success": state.node == env.GOAL,
-        "reached": reached,
+        "reached": [goals.stages[event.index].target for event in goals.arrivals],
         "actions": actions,
         "switches": switches,
         "suffix_queries": suffix_queries,
@@ -451,9 +460,7 @@ def run(
             "min_reliability": RELIABLE,
             "min_gain": MINIMUM_GAIN,
             "candidate_bank_sha256": sha256(bank.read_bytes()).hexdigest(),
-            "weights_sha256": sha256(
-                (out / "weights.msgpack").read_bytes()
-            ).hexdigest(),
+            "weights_sha256": sha256((out / WEIGHTS_FILE).read_bytes()).hexdigest(),
         },
     )
     layouts_by_id = {world.id: world for world in worlds}
