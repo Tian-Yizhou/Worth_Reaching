@@ -56,7 +56,6 @@ from worth_reaching.models.training import (
     load_weights,
     restore_weights,
     save_weights,
-    tensor,
     weights,
 )
 from worth_reaching.tasks.ogbench_manipulation.environment import Manipulation
@@ -112,19 +111,6 @@ def load_executor(run: Path) -> tuple[GCIVL, dict]:
     return model, manifest
 
 
-def _encode_archive(completion: LearnedCompletion, observations: np.ndarray):
-    normalized = (observations - completion.mean) / completion.scale
-    with torch.no_grad():
-        return np.concatenate(
-            [
-                completion.codec.encode(tensor(chunk)).numpy()
-                for chunk in np.array_split(
-                    normalized, max(1, len(normalized) // 65536)
-                )
-            ]
-        ).astype(np.float32)
-
-
 def _train(train, validation, config: SceneRegionConfig, out: Path):
     completion_config = config.completion
     seed = completion_config.seed
@@ -161,7 +147,7 @@ def _train(train, validation, config: SceneRegionConfig, out: Path):
         config.latent_executor,
         seed=seed,
         out=out / "checkpoints" / "latent-executor",
-        goal_features=_encode_archive(completion, train.observations),
+        goal_features=completion.encode_observations(train.observations),
     )
     save_weights(
         out / WEIGHTS_FILE,

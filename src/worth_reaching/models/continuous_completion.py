@@ -178,6 +178,19 @@ class LearnedCompletion:
         return features, self.predictor(features)
 
     @torch.no_grad()
+    def encode_observations(
+        self, observations: np.ndarray, chunk: int = 65536
+    ) -> np.ndarray:
+        """Frozen encodings of raw observations, row by row."""
+        normalized = (observations - self.mean) / self.scale
+        return np.concatenate(
+            [
+                self.codec.encode(tensor(normalized[begin : begin + chunk])).numpy()
+                for begin in range(0, len(normalized), chunk)
+            ]
+        ).astype(np.float32)
+
+    @torch.no_grad()
     def decode(self, latent: Tensor) -> np.ndarray:
         return self.codec.decode(latent).numpy() * self.scale + self.mean
 
