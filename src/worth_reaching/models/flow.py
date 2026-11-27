@@ -19,11 +19,11 @@ from worth_reaching.models.training import (
 
 
 class RouteFlow(nn.Module):
-    def __init__(self, size: int, condition_size: int):
+    def __init__(self, size: int, condition_size: int, width: int = 128):
         super().__init__()
         self.size = size
         self.net = mlp(
-            size + condition_size + 1, 128, size, layers=2, activation=nn.SiLU
+            size + condition_size + 1, width, size, layers=2, activation=nn.SiLU
         )
 
     def forward(self, noisy: Tensor, time: Tensor, condition: Tensor) -> Tensor:
@@ -58,14 +58,18 @@ def fit(
     updates: int,
     out: Path,
     learning_rate: float = 0.001,
+    width: int = 128,
+    batch_size: int = 64,
     resume: Path | None = None,
 ):
     condition, residual = tensor(condition), tensor(residual)
     scale = residual.std(dim=(0, 1), correction=0).clamp_min(0.01)
     normalized = (residual / scale).flatten(1)
     torch.manual_seed(seed)
-    model = RouteFlow(normalized.shape[-1], condition.shape[-1])
-    batches = FlowBatches(RandomBatches((normalized, condition), 64, (seed, 1)), seed)
+    model = RouteFlow(normalized.shape[-1], condition.shape[-1], width)
+    batches = FlowBatches(
+        RandomBatches((normalized, condition), batch_size, (seed, 1)), seed
+    )
     return train_stage(
         model,
         batches,
@@ -89,8 +93,8 @@ def route_conditions(inputs, forecast: Tensor, goals: int) -> Tensor:
 
 
 def load_parameters(size: int, values: dict) -> RouteFlow:
-    conditions = values["net.0.weight"].shape[1] - size - 1
-    model = RouteFlow(size, conditions)
+    width, inputs = values["net.0.weight"].shape
+    model = RouteFlow(size, inputs - size - 1, width)
     restore_weights(model, values)
     return model
 
