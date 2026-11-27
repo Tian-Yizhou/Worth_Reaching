@@ -19,7 +19,7 @@ from worth_reaching.models.region import (
     interpolated_pairs,
     kernel_support,
 )
-from worth_reaching.models.training import stream_seed
+from worth_reaching.models.training import stream_seed, tensor
 from worth_reaching.planning.arrival import (
     EncoderConsistency,
     GaussianSupport,
@@ -49,6 +49,25 @@ class RegionWindows:
             and len(self.predicted) == len(self.states)
         ):
             raise ValueError("Expected one prediction, encoding and context per state")
+
+
+def region_windows(model, batch) -> RegionWindows:
+    """Pair the completion's forecasts with realized states in normalized space."""
+    _, forecast = model.forecast(batch.context)
+    states = (batch.targets - model.mean) / model.scale
+    encoded = model.codec.encode(tensor(states)).detach().numpy()
+    contexts = np.repeat(
+        ((batch.context.observations[:, -1] - model.mean) / model.scale)[:, None],
+        states.shape[1],
+        axis=1,
+    )
+    size = states.shape[-1]
+    return RegionWindows(
+        forecast.numpy().reshape(-1, encoded.shape[-1]),
+        encoded.reshape(-1, encoded.shape[-1]),
+        contexts.reshape(-1, size).astype(np.float32),
+        states.reshape(-1, size).astype(np.float32),
+    )
 
 
 @dataclass(frozen=True, slots=True)

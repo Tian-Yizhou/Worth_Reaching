@@ -99,6 +99,43 @@ def _scene_executor(args: argparse.Namespace) -> dict[str, object]:
     )
 
 
+def _scene_regions(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.scene_regions import SceneRegionConfig, run
+    from worth_reaching.models.continuous_completion import CompletionConfig
+    from worth_reaching.models.gcivl import GCIVLConfig
+    from worth_reaching.models.region import RegionConfig
+
+    config = SceneRegionConfig(
+        completion=completion_recipe(
+            CompletionConfig(max_horizon=SCENE.action_limit), args
+        ),
+        region=RegionConfig(
+            updates=args.region_updates,
+            width=args.region_width,
+            batch_size=args.region_batch_size,
+        ),
+        latent_executor=GCIVLConfig(
+            updates=args.latent_updates, batch_size=args.latent_batch_size
+        ),
+        recall_levels=tuple(args.recall_levels),
+        region_samples=args.region_samples,
+        decoder_windows=args.decoder_windows,
+        stages=args.stages,
+        sample_repeats=args.sample_repeats,
+    )
+    return run(
+        args.data_dir,
+        args.executor,
+        args.out,
+        config,
+        split=args.eval_split,
+        tasks=tuple(dict.fromkeys(args.task or (4, 5))),
+        repeats=args.eval_repeats,
+        workers=args.eval_workers,
+        models_run=args.models,
+    )
+
+
 def _scene_evaluate(args: argparse.Namespace) -> dict[str, object]:
     from worth_reaching.evaluation.ogbench_manipulation import evaluate_frozen_scene
 
@@ -225,6 +262,45 @@ def main() -> None:
         "--resume", type=Path, help="Continue from a Lightning executor checkpoint"
     )
     executor.set_defaults(run=_scene_executor, extra="ogbench")
+    scene_regions = commands.add_parser(
+        "scene-regions",
+        help="Compare region and point goals in closed loop on Scene tasks",
+    )
+    scene_regions.add_argument(
+        "--executor",
+        type=Path,
+        required=True,
+        help="A scene-executor run whose GCIVL executor pursues observation goals",
+    )
+    scene_regions.add_argument(
+        "--models",
+        type=Path,
+        help="Reuse the world model, decoder and latent executor of a scene-regions run",
+    )
+    scene_regions.add_argument(
+        "--data-dir", type=Path, default=Path("results/datasets/ogbench")
+    )
+    scene_regions.add_argument("--out", type=Path, required=True)
+    scene_regions.add_argument("--seed", type=int)
+    for name in ("windows", "codec-updates", "predictor-updates", "flow-updates"):
+        scene_regions.add_argument(f"--{name}", type=int)
+    scene_regions.add_argument("--task", type=int, choices=TASKS, action="append")
+    scene_regions.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    scene_regions.add_argument("--eval-repeats", type=int, default=20)
+    scene_regions.add_argument("--eval-workers", type=int, default=1)
+    scene_regions.add_argument("--latent-updates", type=int, default=1_000_000)
+    scene_regions.add_argument("--latent-batch-size", type=int, default=1024)
+    scene_regions.add_argument("--region-updates", type=int, default=3000)
+    scene_regions.add_argument("--region-width", type=int, default=128)
+    scene_regions.add_argument("--region-batch-size", type=int, default=64)
+    scene_regions.add_argument("--decoder-windows", type=int, default=20000)
+    scene_regions.add_argument(
+        "--recall-levels", type=float, nargs="+", default=[0.5, 0.75, 0.9]
+    )
+    scene_regions.add_argument("--region-samples", type=int, default=32)
+    scene_regions.add_argument("--stages", type=int, default=1)
+    scene_regions.add_argument("--sample-repeats", type=int, default=2)
+    scene_regions.set_defaults(run=_scene_regions, extra="ogbench")
     comparison = commands.add_parser(
         "attempt-compare", help="Fit and compare shared-bank selectors"
     )
@@ -237,6 +313,7 @@ def main() -> None:
         command.add_argument(
             "--resume", type=Path, help="Continue from a compatible Lightning run"
         )
+    for command in (pointmaze, scene, scene_regions):
         command.add_argument(
             "--config", type=Path, help="TOML completion recipe with a [model] table"
         )

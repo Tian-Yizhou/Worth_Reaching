@@ -6,11 +6,10 @@ Polyak-averaged target. The policy is extracted by advantage-weighted regression
 the advantage V(s', g) − V(s, g). With a constant standard deviation, the actor's
 log-likelihood loss is a weighted squared error on the mean action.
 
-The goal can be a state or, for a latent-conditioned executor, a vector supplied by
-a goal transform such as a frozen encoder.
+The goal can be a state or, for a latent-conditioned executor, a feature row aligned
+with the archive, such as the frozen encoding of every observation.
 """
 
-from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -123,7 +122,8 @@ class GCIVLBatches:
     archive: StateArchive
     config: GCIVLConfig
     seed: tuple[int, ...]
-    goal_transform: Callable[[np.ndarray], np.ndarray] | None = None
+    goal_features: np.ndarray | None = None
+    """Goal inputs aligned with archive rows; the observations when omitted."""
 
     def __call__(self, step: int):
         archive, config = self.archive, self.config
@@ -153,14 +153,17 @@ class GCIVLBatches:
             tensor(observations[rows]),
             tensor(observations[rows + 1]),
             tensor(archive.actions[rows]),
-            tensor(self._goal(observations[value_goals])),
-            tensor(self._goal(observations[actor_goals])),
+            tensor(self._goals[value_goals]),
+            tensor(self._goals[actor_goals]),
             tensor(successes - 1),
             tensor(1 - successes),
         )
 
-    def _goal(self, states: np.ndarray) -> np.ndarray:
-        return states if self.goal_transform is None else self.goal_transform(states)
+    @property
+    def _goals(self) -> np.ndarray:
+        if self.goal_features is None:
+            return self.archive.observations
+        return self.goal_features
 
 
 def gcivl_loss(model: GCIVL, batch):
@@ -199,21 +202,18 @@ def fit_gcivl(
     *,
     seed: int,
     out: Path,
-    goal_size: int | None = None,
-    goal_transform: Callable[[np.ndarray], np.ndarray] | None = None,
+    goal_features: np.ndarray | None = None,
     resume: Path | None = None,
 ) -> GCIVL:
+    if goal_features is not None and len(goal_features) != len(archive.observations):
+        raise ValueError("Goal features must align with the archive rows")
     torch.manual_seed(seed)
     observation_size = archive.observations.shape[-1]
-    model = GCIVL(
-        observation_size,
-        observation_size if goal_size is None else goal_size,
-        action_size,
-        config,
-    )
+    goals = archive.observations if goal_features is None else goal_features
+    model = GCIVL(observation_size, goals.shape[-1], action_size, config)
     return train_stage(
         model,
-        GCIVLBatches(archive, config, (seed, 900), goal_transform),
+        GCIVLBatches(archive, config, (seed, 900), goal_features),
         gcivl_loss,
         steps=config.updates,
         learning_rate=config.learning_rate,

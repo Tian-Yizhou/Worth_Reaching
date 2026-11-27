@@ -290,7 +290,7 @@ def test_pointmaze_cli_trains_and_pairs_rollouts(
         assert arms["oracle"]["plans_per_episode"] >= 1
         flow = arms["region_flow@0.75/sample"]
         assert "difference_from_point_native" in flow
-        assert 0 <= flow["targets_in_wall"] <= 1
+        assert 0 <= flow["target_checks"]["in_wall"] <= 1
         with gzip.open(regions_out / "attempts.jsonl.gz", "rt") as stream:
             attempts = [json.loads(line) for line in stream]
         assert len(attempts) == 2 + 2 * len(manifest["arms"])
