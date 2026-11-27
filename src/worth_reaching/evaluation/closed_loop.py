@@ -222,9 +222,18 @@ def episode_key(models: RegionModels, episode: Episode) -> int:
 
 
 def record(episode: Episode, policy: ClosedLoop, success: bool, steps: int, first):
-    """Summarize one attempt, counting how its declared targets fared on each check."""
+    """Summarize one attempt, counting how its declared targets fared on each check.
+
+    Only plans made before the first success count, since an episode can continue at
+    the goal and keep replanning there.
+    """
     events = policy.goals.events if policy.goals is not None else []
-    checks = [check for plan in policy.plans for check in plan.get("checks", [])]
+    checks = [
+        check
+        for plan in policy.plans
+        if first is None or plan["step"] < first
+        for check in plan.get("checks", [])
+    ]
     return {
         **asdict(episode),
         "success": bool(success),
