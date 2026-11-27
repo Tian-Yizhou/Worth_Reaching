@@ -189,3 +189,63 @@ def test_scene_executor_cli_trains_and_scores_official_tasks(tmp_path):
     )
     reused_manifest = json.loads((reused / "manifest.json").read_text())
     assert reused_manifest["weights_sha256"] == manifest["weights_sha256"]
+
+    options = tmp_path / "options"
+    option_flags = [
+        "--data-dir",
+        tmp_path,
+        "--task",
+        "2",
+        "--eval-repeats",
+        "1",
+        "--eval-workers",
+        "2",
+        "--value-updates",
+        "2",
+        "--value-options",
+        "64",
+        "--value-heads",
+        "2",
+        "--online-rounds",
+        "1",
+        "--online-episodes",
+        "2",
+        "--online-updates",
+        "2",
+        "--samples",
+        "2",
+    ]
+    subprocess.run(
+        ["wr", "scene-options", "--regions", regions, "--out", options, *option_flags],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    summary = json.loads((options / "summary.json").read_text())
+    assert summary["starts"] == 1 and set(summary["per_task"]) == {"2"}
+    assert {"direct", "direct_latent", "online/fast@0.001"} <= set(summary["arms"])
+    assert "oracle" not in summary["arms"]
+    (round_,) = summary["rounds"]
+    assert round_["episodes"] == 2 and "value_range" in round_
+    manifest = json.loads((options / "manifest.json").read_text())
+    assert manifest["training_resets"]["seeds"] == [63001, 63003]
+    assert (options / "executor-attempts.npz").exists() or round_["attempts"] == 0
+
+    again = tmp_path / "options-again"
+    subprocess.run(
+        [
+            "wr",
+            "scene-options",
+            "--regions",
+            regions,
+            "--trained",
+            options,
+            "--out",
+            again,
+            *option_flags,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads((again / "summary.json").read_text())["arms"] == summary["arms"]

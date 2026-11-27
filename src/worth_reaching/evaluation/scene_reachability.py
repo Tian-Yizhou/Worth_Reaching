@@ -81,6 +81,11 @@ def _effector_match(observation: np.ndarray, goal: np.ndarray) -> np.ndarray:
     return distance <= 10 * ARRIVAL_METERS
 
 
+def scene_success(observations: np.ndarray, goals: np.ndarray) -> np.ndarray:
+    """The official scene predicate on cube, drawer, window and button states."""
+    return _scene_match(observations, goals)
+
+
 def arrived(observations: np.ndarray, goal: np.ndarray) -> np.ndarray:
     """The official scene predicate plus an end effector within 4 cm of the goal."""
     return _scene_match(observations, goal) & _effector_match(observations, goal)
