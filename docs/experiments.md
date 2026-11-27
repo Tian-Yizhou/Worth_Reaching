@@ -144,6 +144,7 @@ Artifacts stay in `results/` on the server. Git and the Mac sync scripts exclude
 | `results/datasets/` | Complete trajectory collections and their logs |
 | `results/dependency-grid.*/` | Layouts, matched target attempts and terminal success by goal and depth |
 | `results/dependency-grid-latent.*/` | Public trajectories, frozen weights, candidate declarations, and matched terminal outcomes |
+| `results/pointmaze-regions-*/` | Maze2D world models, region decoders, latent executors and matched attempts by arm |
 | `results/dependency-grid-regions-*/` | Region decoders, executors, declared regions and matched attempts by arm |
 | `results/budget-routes.*/` | Route candidate banks, matched attempts and results by budget |
 | `results/attempt-compare.*/` | Shared-bank selector fits and paired comparisons |
@@ -298,6 +299,16 @@ uv run --no-sync wr pointmaze-latent-energy --runs "$run_dir"/medium-{7,19} \
 The evaluator first writes all candidates, energy scores, and selections to `candidate-bank.json` and records its hash. It then replays each reset and attempts every declared candidate. The shared controller pursues the decoded targets in order, using the original absolute query deadlines. The benchmark's native sparse rule measures arrival in public XY. The first miss or the final arrival hands control to direct terminal tracking for the rest of the budget. The pair experiment scores and attempts both positions in order. Any suffix after the attempted prefix is integrated out by projecting the independent reference draws onto that prefix.
 
 `episodes.json` records attempted targets by candidate index, stage arrival or miss, steps spent, remaining budget, and terminal success. `summary.json` compares lowest and highest energy, lowest forecast error, the first flow draw, and the expected success of uniform choice on the shared bank. It also reports the direct-from-reset baseline and includes terminal successes after a missed target. The experiment measures conditional model energy across candidates within a start and prefix length. Reference draws estimate model density, while demonstration prevalence requires a separate measurement on the source trajectories. Set `--eval-split dev --eval-repeats 1 --candidates 3 --density-samples 16` for a smoke check.
+
+### Compare region goals with point goals in Maze2D
+
+This is E1 on a continuous task. It reads a frozen `pointmaze-latent` budget directory, checks the dataset checksum against it, and trains a region decoder and a latent-conditioned executor on the same archive. [Grid version](#compare-region-goals-with-decoded-point-goals)
+
+```bash
+uv run --no-sync wr pointmaze-regions --checkpoint "$run_dir/medium" --out "$run_dir/medium-regions"
+```
+
+Every start declares the forecast and eight flow proposals for the first query, with the first query offset as the deadline. Diffuser's position and velocity tracker is the observation executor and the shared continuation toward the terminal goal, so no arm hands control to a learned policy that knows the task. `point_native` and `sample_native` track the decoded state or one region realization until the benchmark's sparse XY predicate fires. `decoded_support@r` and `sample_support@r` track the same targets with region-support arrival. `latent_point@r`, `region_gaussian@r` and `region_flow@r` give the latent executor z itself. Regions and kernels live in observations normalized by the training scale, with a bandwidth of 0.25. Thresholds are calibrated to equal recall on validation windows, and paired differences from `point_native` carry start-bootstrap intervals. The coherence diagnostic tracks four realizations of each flow region. A smoke run uses `--eval-repeats 1 --candidates 2 --region-updates 2 --executor-updates 2 --executor-pairs 64`.
 
 ## Run state-based OGBench Scene
 
