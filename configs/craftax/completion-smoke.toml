@@ -1,8 +1,0 @@
-[model]
-width = 32
-latent_size = 8
-history_length = 4
-queries_per_window = 4
-batch_size = 16
-encoder_updates = 2
-updates = 2

@@ -32,34 +32,6 @@ def test_auto_uses_cpu_when_the_launcher_hides_all_gpus(monkeypatch):
     assert os.environ["CUDA_VISIBLE_DEVICES"] == ""
 
 
-def test_device_cli_shards_a_padded_batch_on_the_cpu_mesh(tmp_path):
-    pytest.importorskip("jax")
-    config = tmp_path / "cpu.toml"
-    config.write_text('[compute]\nplatform = "cpu"\n', encoding="utf-8")
-    report = subprocess.run(
-        [
-            "wr",
-            "--compute-config",
-            config,
-            "devices",
-            "--framework",
-            "jax",
-            "--batch-size",
-            "5",
-        ],
-        env={**os.environ, "JAX_NUM_CPU_DEVICES": "3"},
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    result = json.loads(report.stdout)
-    assert result["backend"] == "cpu"
-    assert result["device_count"] == 3
-    assert result["rows_per_device"] == [2, 2, 2]
-    assert result["padded_rows"] == 1
-    assert result["mean_squared"] == 6.0
-
-
 def test_lightning_batch_padding_preserves_the_sampled_global_batch():
     torch = pytest.importorskip("torch")
     pytest.importorskip("lightning")

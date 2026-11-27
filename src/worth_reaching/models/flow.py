@@ -1,6 +1,5 @@
 """Conditional flow matching for residuals around a latent forecast."""
 
-from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,11 +10,9 @@ from torch.nn import functional as F
 
 from worth_reaching.models.codec import legacy_dense, mlp
 from worth_reaching.models.training import (
-    Batch,
     RandomBatches,
     regression,
     restore_weights,
-    stage_resume,
     tensor,
     train_stage,
 )
@@ -98,96 +95,6 @@ def load_parameters(size: int, values: dict) -> RouteFlow:
     model = RouteFlow(size, conditions)
     restore_weights(model, values)
     return model
-
-
-@dataclass(frozen=True)
-class FeedbackBatches:
-    demonstrations: RandomBatches
-    conditions: Tensor
-    targets: Tensor
-    credit: Tensor
-    probabilities: np.ndarray
-    seed: int
-
-    def __call__(self, step: int):
-        demo_targets, demo_conditions = self.demonstrations(step)
-        demonstration = flow_path(
-            demo_targets, np.random.default_rng([self.seed, 84, step])
-        )
-        rng = np.random.default_rng([self.seed, 83, step])
-        rows = rng.choice(
-            len(self.targets), size=len(demo_targets), p=self.probabilities
-        )
-        mask = self.credit[rows]
-        attempt = flow_path(self.targets[rows], rng, mask)
-        return (
-            demonstration[0],
-            demonstration[1],
-            demo_conditions,
-            demonstration[2],
-            attempt[0],
-            attempt[1],
-            self.conditions[rows],
-            attempt[2],
-            mask,
-        )
-
-
-def demonstration_loss(model: nn.Module, batch: Batch):
-    return regression(model, batch[:4])
-
-
-def feedback_loss(model: nn.Module, batch: Batch):
-    return (
-        *demonstration_loss(model, batch),
-        (model(*batch[4:7]) - batch[7], batch[8] > 0),
-    )
-
-
-def refine(
-    model: RouteFlow,
-    demonstration_conditions,
-    demonstration_targets,
-    attempt_conditions,
-    attempt_targets,
-    credit_mask,
-    sampling_weights,
-    *,
-    seed: int,
-    updates: int,
-    out: Path,
-    resume: Path | None = None,
-) -> tuple[RouteFlow, RouteFlow]:
-    """Use matched optimizer batches for both arms of the feedback comparison."""
-    batches = FeedbackBatches(
-        RandomBatches(
-            (tensor(demonstration_targets), tensor(demonstration_conditions)),
-            64,
-            (seed, 82),
-        ),
-        tensor(attempt_conditions),
-        tensor(attempt_targets),
-        tensor(credit_mask),
-        sampling_weights,
-        seed,
-    )
-    models = []
-    for stage, objective in (
-        ("demonstrations", demonstration_loss),
-        ("feedback", feedback_loss),
-    ):
-        models.append(
-            train_stage(
-                deepcopy(model),
-                batches,
-                objective,
-                steps=updates,
-                learning_rate=0.0003,
-                out=out / stage,
-                resume=stage_resume(resume, stage),
-            )
-        )
-    return models[0], models[1]
 
 
 @torch.no_grad()

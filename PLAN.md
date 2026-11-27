@@ -66,11 +66,11 @@ The paper uses these public entry points. The region decoder, latent-conditioned
 | `wr budget-routes` | Budget-conditioned composition, fixed-pool route changes, rare-path confirmation and suffix replanning. [Routes protocol](docs/experiments.md#compose-latent-goals-under-action-budgets) |
 | `wr attempt-compare` | Selector comparison on `shared_attempts_v1` banks. The base for E3. [Selector comparison](docs/experiments.md#compare-selectors-on-matched-attempts) |
 | `wr scene-latent`, `wr scene-evaluate`, `wr scene-reachability` | Scene training, terminal evaluation and executor qualification. [Scene protocol](docs/experiments.md#run-state-based-ogbench-scene) |
-| `wr pointmaze-latent`, `wr pointmaze-first-targets`, `wr pointmaze-latent-energy` | Maze2D planning, budget sweeps and frozen-energy tests. [Maze2D protocol](docs/experiments.md#run-the-diffuser-maze2d-pilots) |
+| `wr pointmaze-latent`, `wr pointmaze-latent-energy` | Maze2D planning, budget sweeps and frozen-energy tests. [Maze2D protocol](docs/experiments.md#run-the-diffuser-maze2d-pilots) |
 
-The shared masked trajectory completion model supplies the proposer for every task. It trains a public-history encoder and predictor to complete the hidden middle representations from both ends, then samples alternatives with residual flow matching. [Trajectory completion design](docs/trajectory-completion.md) · [Training protocol](docs/experiments.md#train-and-test-latent-trajectory-completion)
+The shared masked trajectory completion model supplies the proposer for every task. It trains a public-history encoder and predictor to complete the hidden middle representations from both ends, then samples alternatives with residual flow matching. [Trajectory completion design](docs/trajectory-completion.md) · [Model configuration](docs/experiments.md#configure-a-completion-model)
 
-These runners remain available but are outside the paper's main line: Craftax window export and collection, KeyCorridor replay, the two-goal grid and its feedback training (`wr grid-feedback`), AntMaze GCBC and latent planning, Kuka stacking and Puzzle. The feedback runner is the starting point for the P2 generator update. [Running experiments](docs/experiments.md) · [Environments](docs/experiment_env.md)
+Runners outside the paper's main line were removed: Craftax collection and windows, KeyCorridor replay, the two-goal grid and its feedback training, AntMaze, Kuka stacking, OGBench Puzzle and the Maze2D first-target probe. Retrieve them from Git history if a follow-up needs them. [Running experiments](docs/experiments.md) · [Environments](docs/experiment_env.md)
 
 ## Evaluation protocol
 
