@@ -140,3 +140,21 @@ def test_regions_cli_declares_regions_before_matched_attempts(tmp_path):
     rows = [json.loads(line) for line in (out / "attempts.jsonl").open()]
     assert all(np.asarray(row["coherence"]["values"]).shape == (2, 2) for row in rows)
     assert all(row["arms"]["direct"]["arrival"] == 0 for row in rows)
+
+
+def test_closed_loop_record_ignores_plans_after_success():
+    pytest.importorskip("numpy")
+    pytest.importorskip("torch")
+    from types import SimpleNamespace
+
+    from worth_reaching.evaluation.closed_loop import Episode, record
+
+    plans = [
+        {"step": step, "targets": [], "checks": [{"progress": step < 5}]}
+        for step in (0, 4, 8, 9)
+    ]
+    policy = SimpleNamespace(goals=None, plans=plans)
+    row = record(Episode("oracle", "forecast", 0), policy, True, 10, 6)
+    assert row["targets"] == 2 and row["checks"] == {"progress": 2}
+    row = record(Episode("oracle", "forecast", 0), policy, False, 10, None)
+    assert row["targets"] == 4 and row["checks"] == {"progress": 2}

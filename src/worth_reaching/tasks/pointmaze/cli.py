@@ -3,7 +3,7 @@
 import argparse
 from pathlib import Path
 
-from worth_reaching.recipes import completion_recipe
+from worth_reaching.recipes import add_option_arguments, completion_recipe
 from worth_reaching.tasks.pointmaze.spec import TASKS as POINTMAZE_TASKS
 
 
@@ -68,6 +68,29 @@ def _pointmaze_regions(args: argparse.Namespace) -> dict[str, object]:
         split=args.eval_split,
         repeats=args.eval_repeats,
         workers=args.eval_workers,
+    )
+
+
+def _pointmaze_options(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.options import settings
+    from worth_reaching.models.gcivl import GCIVLConfig
+    from worth_reaching.tasks.pointmaze.options import MazeOptionConfig, run
+
+    config = MazeOptionConfig(
+        executor=GCIVLConfig(
+            updates=args.executor_updates, batch_size=args.executor_batch_size
+        ),
+        **settings(args),
+    )
+    return run(
+        args.data_dir,
+        args.checkpoint,
+        args.out,
+        config,
+        split=args.eval_split,
+        repeats=args.eval_repeats,
+        workers=args.eval_workers,
+        trained=args.trained,
     )
 
 
@@ -158,4 +181,30 @@ def register_commands(commands) -> argparse.ArgumentParser:
     )
     regions.add_argument("--region-samples", type=int, default=32)
     regions.set_defaults(run=_pointmaze_regions, extra="pointmaze")
+    options = commands.add_parser(
+        "pointmaze-options",
+        help="Plan with latent options and a budget-conditioned value in PointMaze",
+    )
+    options.add_argument(
+        "--checkpoint",
+        type=Path,
+        required=True,
+        help="Budget directory of a pointmaze-latent run",
+    )
+    options.add_argument(
+        "--trained",
+        type=Path,
+        help="Reuse the executor and value of an earlier pointmaze-options run",
+    )
+    options.add_argument(
+        "--data-dir", type=Path, default=Path("results/datasets/minari")
+    )
+    options.add_argument("--out", type=Path, required=True)
+    options.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    options.add_argument("--eval-repeats", type=int, default=64)
+    options.add_argument("--eval-workers", type=int, default=1)
+    options.add_argument("--executor-updates", type=int, default=300_000)
+    options.add_argument("--executor-batch-size", type=int, default=1024)
+    add_option_arguments(options)
+    options.set_defaults(run=_pointmaze_options, extra="pointmaze")
     return pointmaze

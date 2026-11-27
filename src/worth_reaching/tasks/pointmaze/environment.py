@@ -8,6 +8,8 @@ import numpy as np
 from worth_reaching.tasks.pointmaze.spec import PointMazeTask
 
 SEED_BASE = {"dev": 29001, "test": 69001}
+GOAL_RADIUS = 0.45
+"""Distance at which the native sparse predicate counts a position as the goal."""
 
 
 class Step(NamedTuple):

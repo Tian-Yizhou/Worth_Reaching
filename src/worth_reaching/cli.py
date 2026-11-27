@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from worth_reaching.compute import ComputeConfig
-from worth_reaching.recipes import completion_recipe
+from worth_reaching.recipes import add_option_arguments, completion_recipe
 from worth_reaching.tasks.budget_routes.cli import (
     register_commands as register_budget_routes,
 )
@@ -133,6 +133,23 @@ def _scene_regions(args: argparse.Namespace) -> dict[str, object]:
         repeats=args.eval_repeats,
         workers=args.eval_workers,
         models_run=args.models,
+    )
+
+
+def _scene_options(args: argparse.Namespace) -> dict[str, object]:
+    from worth_reaching.evaluation.options import settings
+    from worth_reaching.evaluation.scene_options import SceneOptionConfig, run
+
+    return run(
+        args.data_dir,
+        args.regions,
+        args.out,
+        SceneOptionConfig(**settings(args)),
+        split=args.eval_split,
+        tasks=tuple(dict.fromkeys(args.task or (2, 3, 4, 5))),
+        repeats=args.eval_repeats,
+        workers=args.eval_workers,
+        trained=args.trained,
     )
 
 
@@ -301,6 +318,31 @@ def main() -> None:
     scene_regions.add_argument("--stages", type=int, default=1)
     scene_regions.add_argument("--sample-repeats", type=int, default=2)
     scene_regions.set_defaults(run=_scene_regions, extra="ogbench")
+    scene_options = commands.add_parser(
+        "scene-options",
+        help="Plan with latent options and a budget-conditioned value on Scene tasks",
+    )
+    scene_options.add_argument(
+        "--regions",
+        type=Path,
+        required=True,
+        help="A scene-regions run whose world model and latent executor are reused",
+    )
+    scene_options.add_argument(
+        "--trained",
+        type=Path,
+        help="Reuse the option values of an earlier scene-options run",
+    )
+    scene_options.add_argument(
+        "--data-dir", type=Path, default=Path("results/datasets/ogbench")
+    )
+    scene_options.add_argument("--out", type=Path, required=True)
+    scene_options.add_argument("--task", type=int, choices=TASKS, action="append")
+    scene_options.add_argument("--eval-split", choices=("dev", "test"), default="dev")
+    scene_options.add_argument("--eval-repeats", type=int, default=20)
+    scene_options.add_argument("--eval-workers", type=int, default=1)
+    add_option_arguments(scene_options)
+    scene_options.set_defaults(run=_scene_options, extra="ogbench")
     comparison = commands.add_parser(
         "attempt-compare", help="Fit and compare shared-bank selectors"
     )
