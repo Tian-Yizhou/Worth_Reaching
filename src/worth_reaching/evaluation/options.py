@@ -128,7 +128,8 @@ Arm = tuple[str, PlannerConfig | str]
 
 def option_arms(config: OptionRunConfig, bounds: tuple[str, ...]) -> dict[str, Arm]:
     """Bounds, direct latent pursuit, both values with and without faster routes, and
-    ablations of the corrected value with faster routes."""
+    ablations of the corrected value with faster routes. The random-first ablation
+    measures the value's calibration without selection at the first decision."""
     planner, cost = config.planner, config.eval_costs[-1]
     fast = replace(planner, time_cost=cost, proposal_budgets=config.fast_budgets)
     result: dict[str, Arm] = {bound: (ONLINE, bound) for bound in bounds}
@@ -149,6 +150,10 @@ def option_arms(config: OptionRunConfig, bounds: tuple[str, ...]) -> dict[str, A
         replace(fast, interrupt=False),
     )
     result[f"online/fast_fixed_duration@{cost:g}"] = (ONLINE, replace(fast, slots=(0,)))
+    result[f"online/fast_random_first@{cost:g}"] = (
+        ONLINE,
+        replace(fast, explore_first=True),
+    )
     return result
 
 

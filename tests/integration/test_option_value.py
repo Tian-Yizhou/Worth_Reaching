@@ -189,6 +189,28 @@ def test_planner_switches_to_a_cached_candidate_and_falls_back_to_the_goal():
     assert explorer.log.decisions and not any(d["goal"] for d in explorer.log.decisions)
     assert all(d["explored"] for d in explorer.log.decisions)
     assert all(d["goal_value"] == pytest.approx(3.0) for d in explorer.log.decisions)
+    first = explorer.log.decisions[0]
+    assert first["candidates"] == 5 and first["spread"] == pytest.approx(0.01)
+    assert first["sampled_median"] == pytest.approx(0.15)
+    # Each head values the goal, the other head's first choice, at 3 -/+ 0.01.
+    assert first["holdout_value"] == pytest.approx(3.0)
+
+    # Random-first draws a sampled candidate at the start only, then plans greedily.
+    first_only = OptionPlanner(
+        Completion(),
+        Value(),
+        lambda observation, latent: np.zeros(2),
+        key=0,
+        limit=50,
+        config=PlannerConfig(explore_first=True, interrupt=False),
+        action_size=2,
+    )
+    first_only._propose = lambda goal, remaining: list(sampled)
+    for _ in range(20):
+        first_only(np.zeros(2, np.float32), np.array([3.0, 0.0], np.float32))
+    start, *later = first_only.log.decisions
+    assert start["explored"] and not start["goal"]
+    assert later and all(d["goal"] and not d["explored"] for d in later)
 
 
 def test_attempts_split_an_episode_at_each_pursued_option_and_stop_at_success():

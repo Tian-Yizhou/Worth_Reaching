@@ -53,6 +53,10 @@ class PlannerConfig:
     the executor's attempts. The draw is uniform over proposal budgets, then uniform
     within the budget. The terminal goal is left out: collection tries it on every
     training reset in an episode of its own."""
+    explore_first: bool = False
+    """Pursue a sampled candidate drawn as `explore` draws it at the first decision,
+    then plan greedily. Its value carries no selection, so comparing it with the
+    realized return checks the value's calibration apart from the argmax."""
 
     def __post_init__(self) -> None:
         if (
@@ -171,7 +175,7 @@ class OptionPlanner:
         options = [option] + [other for other in self.cache if other is not option]
         options = [other for other in options if self._left(other, remaining) > 0]
         heads = self._score(state, target, options, remaining)
-        utility = heads.mean(axis=0) + config.risk * heads.std(axis=0)
+        utility = self._utility(heads)
         spread = heads.std(axis=0)
         if utility[0] < self.current.value - config.margin * self.current.spread:
             return "value"
@@ -217,13 +221,14 @@ class OptionPlanner:
         if config.goal_candidate:
             options.append(Option(target, remaining, self.step, goal=True))
         heads = self._score(state, target, options, remaining)
-        utility = heads.mean(axis=0) + config.risk * heads.std(axis=0)
+        utility = self._utility(heads)
         best = int(np.argmax(utility))
         greedy = best
         sources = sorted({option.source for option in options} - {-1})
-        if config.explore and sources:
+        explore = config.explore_first and trigger == "start"
+        if (config.explore or explore) and sources:
             rng = np.random.default_rng(stream_seed(self.key, self.step, 2))
-            if rng.random() < config.explore:
+            if rng.random() < config.explore or explore:
                 source = sources[int(rng.integers(len(sources)))]
                 members = [
                     i for i, option in enumerate(options) if option.source == source
@@ -250,8 +255,34 @@ class OptionPlanner:
                 "best_sampled_value": float(utility[sampled].max())
                 if sampled
                 else None,
+                "candidates": len(options),
+                "spread": float(heads[:, best].std()),
+                "goal_spread": float(heads[:, -1].std())
+                if config.goal_candidate
+                else None,
+                "sampled_mean": float(utility[sampled].mean()) if sampled else None,
+                "sampled_median": float(np.median(utility[sampled]))
+                if sampled
+                else None,
+                "holdout_value": self._holdout(heads),
             }
         )
+
+    def _utility(self, heads: np.ndarray) -> np.ndarray:
+        return heads.mean(axis=0) + self.config.risk * heads.std(axis=0)
+
+    def _holdout(self, heads: np.ndarray) -> float:
+        """Each head's value of the candidate the other heads rank first, averaged.
+
+        The greedy choice's own utility is biased upward by the noise it was selected
+        for; a head that took no part in the selection is not, as far as the heads'
+        errors are independent. The gap between the two estimates that bias.
+        """
+        held = []
+        for head in range(len(heads)):
+            others = np.delete(heads, head, axis=0)
+            held.append(heads[head, int(np.argmax(self._utility(others)))])
+        return float(np.mean(held))
 
     def _propose(self, goal, remaining) -> list[Option]:
         completion, options = self.completion, []
