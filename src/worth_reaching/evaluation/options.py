@@ -297,18 +297,25 @@ def attempts(
     `trajectory[t]` is the observation after `t` actions and `first` the action count at
     the first success. An option started at step `s` and replaced at step `e` covers
     observations `s + 1` to `e`; the one that contains the success stops there.
+
+    An interrupted option is the option with the duration it ran. The option that
+    reached the goal keeps the duration it was commanded: "pursue `z` for at most `k`"
+    succeeded after `d ≤ k` actions. Recording `d` instead would teach the value that an
+    option commanded for the whole budget always fails, since only failures run that
+    long.
     """
     pursued = policy.log.pursued
     if not pursued:
         return None
-    starts = np.array([step for step, _ in pursued])
+    starts = np.array([step for step, _, _ in pursued])
+    commanded = np.array([duration for _, _, duration in pursued])
     stop = NEVER if first is None else first
     ends = np.minimum(np.append(starts[1:], len(trajectory) - 1), stop)
     keep = np.flatnonzero((starts < stop) & (ends > starts))
     if not len(keep):
         return None
-    starts, ends = starts[keep], ends[keep]
-    latents = np.stack([latent for _, latent in pursued])[keep]
+    starts, ends, commanded = starts[keep], ends[keep], commanded[keep]
+    latents = np.stack([latent for _, latent, _ in pursued])[keep]
     encode = policy.completion.encode_observations
     arrived = (starts < stop) & (stop <= ends)
     return OptionAttempts(
@@ -316,7 +323,9 @@ def attempts(
         np.repeat(encode(goal[None]), len(starts), axis=0),
         latents.astype(np.float32),
         encode(trajectory[ends]),
-        (ends - starts).astype(np.int32),
+        np.where(arrived, np.maximum(commanded, stop - starts), ends - starts).astype(
+            np.int32
+        ),
         (limit - starts).astype(np.int32),
         np.where(arrived, stop - starts, NEVER).astype(np.int32),
     )

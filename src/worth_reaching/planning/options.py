@@ -98,8 +98,9 @@ class PlannerLog:
     switches: int = 0
     triggers: dict[str, int] = field(default_factory=dict)
     """New decisions by cause: start, duration, value or surprise."""
-    pursued: list[tuple[int, np.ndarray]] = field(default_factory=list)
-    """Each option the executor started pursuing, as (step, latent)."""
+    pursued: list[tuple[int, np.ndarray, int]] = field(default_factory=list)
+    """Each option the executor started pursuing, as (step, latent, duration), with the
+    duration it was commanded: at most this many actions."""
     decisions: list[dict] = field(default_factory=list)
     """Each new decision: its trigger, the chosen option and the values it compared."""
     switch_log: list[dict] = field(default_factory=list)
@@ -193,7 +194,7 @@ class OptionPlanner:
             )
             self.current = Selected(chosen, float(utility[best]), float(spread[best]))
             self.log.switches += 1
-            self.log.pursued.append((self.step, chosen.latent))
+            self.log.pursued.append((self.step, chosen.latent, chosen.duration))
         return None
 
     def _score(self, state, target, options: list[Option], remaining: int):
@@ -233,7 +234,7 @@ class OptionPlanner:
             chosen, float(utility[best]), float(heads[:, best].std())
         )
         self.cache = options
-        self.log.pursued.append((self.step, chosen.latent))
+        self.log.pursued.append((self.step, chosen.latent, chosen.duration))
         sampled = [i for i, option in enumerate(options) if not option.goal]
         self.log.decisions.append(
             {

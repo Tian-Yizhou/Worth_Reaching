@@ -206,12 +206,15 @@ def test_attempts_split_an_episode_at_each_pursued_option_and_stop_at_success():
     latents = [np.full(1, value, np.float32) for value in (1, 2, 3)]
     policy = SimpleNamespace(
         completion=SimpleNamespace(encode_observations=encode),
-        log=SimpleNamespace(pursued=list(zip((0, 4, 9), latents, strict=True))),
+        log=SimpleNamespace(
+            pursued=list(zip((0, 4, 9), latents, (4, 10, 11), strict=True))
+        ),
     )
     goal = np.full(2, 7, np.float32)
     found = attempts(policy, trajectory, goal, 6, limit=20)
-    # The option started at step 9 began after the success at step 6.
-    np.testing.assert_array_equal(found.durations, [4, 2])
+    # The option started at step 9 began after the success at step 6. The option that
+    # succeeded keeps its commanded duration (10), not the two actions it took.
+    np.testing.assert_array_equal(found.durations, [4, 10])
     np.testing.assert_array_equal(found.budgets, [20, 16])
     np.testing.assert_array_equal(found.first, [NEVER, 2])
     np.testing.assert_array_equal(found.states[:, 0], [0, 40])
